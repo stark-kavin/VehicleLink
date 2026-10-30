@@ -43,7 +43,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -164,7 +167,8 @@ fun VehicleLinkScreen(onOpenNotificationAccess: () -> Unit) {
 
     val connected = conn == VehicleBus.Conn.CONNECTED
     val accent = if (call != null) Vl.Coral else connColor(conn)
-    val bars = WindowInsets.systemBars.asPaddingValues()
+    // safeDrawing = status + navigation bars + display cutout; content scrolls clear of all of them.
+    val bars = WindowInsets.safeDrawing.asPaddingValues()
 
     Box(Modifier.fillMaxSize()) {
         AuroraBackground(accent)
@@ -266,7 +270,26 @@ fun VehicleLinkScreen(onOpenNotificationAccess: () -> Unit) {
                 }
             }
         }
+        SystemBarScrims()
     }
+}
+
+/**
+ * Solid-to-clear fades behind the status and navigation bars, so cards scrolling past never sit
+ * directly under the clock or the nav buttons.
+ */
+@Composable
+private fun BoxScope.SystemBarScrims() {
+    val top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+    val bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+    Box(
+        Modifier.align(Alignment.TopCenter).fillMaxWidth().height(top + 16.dp)
+            .background(Brush.verticalGradient(listOf(Vl.Bg, Vl.Bg.copy(alpha = 0.85f), Color.Transparent)))
+    )
+    Box(
+        Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(bottom + 24.dp)
+            .background(Brush.verticalGradient(listOf(Color.Transparent, Vl.Bg.copy(alpha = 0.9f), Vl.Bg)))
+    )
 }
 
 // ================================================================ header
