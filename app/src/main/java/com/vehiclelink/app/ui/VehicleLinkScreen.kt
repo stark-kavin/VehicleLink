@@ -131,7 +131,10 @@ import com.vehiclelink.app.ble.BleVehicleService
 import com.vehiclelink.app.core.ClusterProtocol
 import com.vehiclelink.app.core.VehicleBus
 import com.vehiclelink.app.media.MediaHub
+import com.vehiclelink.app.ui.theme.Radius
+import com.vehiclelink.app.ui.theme.Space
 import com.vehiclelink.app.ui.theme.Vl
+import com.vehiclelink.app.ui.theme.VlType
 import com.google.android.gms.maps.model.CameraPosition
 import com.google.android.gms.maps.model.LatLng
 import com.google.maps.android.compose.GoogleMap
@@ -175,10 +178,10 @@ fun VehicleLinkScreen(onOpenNotificationAccess: () -> Unit) {
         LazyColumn(
             Modifier.fillMaxSize(),
             contentPadding = PaddingValues(
-                start = 20.dp, end = 20.dp,
-                top = bars.calculateTopPadding() + 12.dp, bottom = bars.calculateBottomPadding() + 28.dp
+                start = Space.Screen, end = Space.Screen,
+                top = bars.calculateTopPadding() + Space.s, bottom = bars.calculateBottomPadding() + Space.xl
             ),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
+            verticalArrangement = Arrangement.spacedBy(Space.m)
         ) {
             item(key = "header") {
                 Header(
@@ -206,7 +209,7 @@ fun VehicleLinkScreen(onOpenNotificationAccess: () -> Unit) {
             }
 
             item(key = "telemetry") {
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(Space.s)) {
                     Metric("Phone battery", "${phone.battery}%", Modifier.weight(1f)) { BatteryGlyph(phone.battery) }
                     Metric("Signal", signalWord(phone.signal), Modifier.weight(1f)) { SignalBars(phone.signal) }
                     Metric("Bike link", if (connected) "Live" else "Off", Modifier.weight(1f)) {

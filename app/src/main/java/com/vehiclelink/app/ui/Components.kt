@@ -65,7 +65,11 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.vehiclelink.app.core.VehicleBus
+import com.vehiclelink.app.ui.theme.BorderWidth
+import com.vehiclelink.app.ui.theme.Radius
+import com.vehiclelink.app.ui.theme.Space
 import com.vehiclelink.app.ui.theme.Vl
+import com.vehiclelink.app.ui.theme.VlType
 
 /** Accent colour for a connection state. */
 fun connColor(conn: VehicleBus.Conn): Color = when (conn) {
@@ -142,10 +146,10 @@ fun GlassCard(
     modifier: Modifier = Modifier,
     accent: Color? = null,
     onClick: (() -> Unit)? = null,
-    padding: Dp = 18.dp,
+    padding: Dp = Space.m,
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    val shape = RoundedCornerShape(24.dp)
+    val shape = RoundedCornerShape(Radius.Card)
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val scale by animateFloatAsState(if (pressed) 0.98f else 1f, spring(stiffness = Spring.StiffnessMediumLow), label = "cardPress")
@@ -159,7 +163,7 @@ fun GlassCard(
                     listOf((accent ?: Color.White).copy(alpha = if (accent != null) 0.10f else 0.07f), Vl.Glass)
                 )
             )
-            .border(1.dp, (accent ?: Color.White).copy(alpha = if (accent != null) 0.28f else 0.09f), shape)
+            .border(BorderWidth, (accent ?: Color.White).copy(alpha = if (accent != null) 0.28f else 0.09f), shape)
             .then(if (onClick != null) Modifier.clickable(interaction, indication = null, onClick = onClick) else Modifier)
             .padding(padding),
         content = content,
@@ -168,16 +172,16 @@ fun GlassCard(
 
 @Composable
 fun Eyebrow(text: String, color: Color = Vl.TextDim, modifier: Modifier = Modifier) {
-    Text(text.uppercase(), style = MaterialTheme.typography.labelSmall, color = color, modifier = modifier)
+    Text(text.uppercase(), style = VlType.Overline, color = color, modifier = modifier)
 }
 
 /** Small rounded square holding an icon — used as the leading visual in cards. */
 @Composable
-fun IconBadge(icon: ImageVector, tint: Color, size: Dp = 44.dp, content: (@Composable BoxScope.() -> Unit)? = null) {
+fun IconBadge(icon: ImageVector, tint: Color, size: Dp = Space.Touch, content: (@Composable BoxScope.() -> Unit)? = null) {
     Box(
-        Modifier.size(size).clip(RoundedCornerShape(14.dp))
+        Modifier.size(size).clip(RoundedCornerShape(Radius.Tile))
             .background(tint.copy(alpha = 0.14f))
-            .border(1.dp, tint.copy(alpha = 0.25f), RoundedCornerShape(14.dp)),
+            .border(BorderWidth, tint.copy(alpha = 0.25f), RoundedCornerShape(Radius.Tile)),
         contentAlignment = Alignment.Center
     ) {
         if (content != null) content() else Icon(icon, null, tint = tint, modifier = Modifier.size(size * 0.5f))
@@ -195,8 +199,8 @@ fun StatusPill(conn: VehicleBus.Conn, text: String) {
     val live = conn != VehicleBus.Conn.DISCONNECTED
     Row(
         Modifier.clip(CircleShape).background(color.copy(alpha = 0.10f))
-            .border(1.dp, color.copy(alpha = 0.25f), CircleShape)
-            .padding(horizontal = 14.dp, vertical = 8.dp),
+            .border(BorderWidth, color.copy(alpha = 0.25f), CircleShape)
+            .padding(horizontal = Space.m, vertical = Space.s),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Box(contentAlignment = Alignment.Center) {
@@ -204,12 +208,12 @@ fun StatusPill(conn: VehicleBus.Conn, text: String) {
                 .background(color.copy(alpha = 0.5f), CircleShape))
             Box(Modifier.size(8.dp).background(color, CircleShape))
         }
-        Spacer(Modifier.width(9.dp))
+        Spacer(Modifier.width(Space.s))
         AnimatedContent(
             text,
             transitionSpec = { (fadeIn(tween(250)) + slideInVertically { it / 2 }) togetherWith (fadeOut(tween(150)) + slideOutVertically { -it / 2 }) },
             label = "statusText"
-        ) { Text(it, fontSize = 13.sp, color = Vl.Text.copy(alpha = 0.85f), maxLines = 1) }
+        ) { Text(it, style = VlType.Label, color = Vl.Text, maxLines = 1) }
     }
 }
 
@@ -233,10 +237,10 @@ fun PrimaryAction(label: String, kind: PrimaryKind, icon: ImageVector?, onClick:
     )
     val border = when (kind) { PrimaryKind.Go -> Color.Transparent; PrimaryKind.Busy -> Vl.Amber.copy(alpha = 0.4f); PrimaryKind.Quiet -> Vl.Stroke }
     Box(
-        modifier.height(58.dp).graphicsLayer { scaleX = scale; scaleY = scale }
+        modifier.height(56.dp).graphicsLayer { scaleX = scale; scaleY = scale }
             .clip(CircleShape)
             .background(bg)
-            .border(1.dp, border, CircleShape)
+            .border(BorderWidth, border, CircleShape)
             .clickable(interaction, indication = null, onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
@@ -248,12 +252,12 @@ fun PrimaryAction(label: String, kind: PrimaryKind, icon: ImageVector?, onClick:
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (k == PrimaryKind.Busy) {
                     CircularProgressIndicator(Modifier.size(16.dp), color = fg, strokeWidth = 2.dp)
-                    Spacer(Modifier.width(10.dp))
+                    Spacer(Modifier.width(Space.s))
                 } else if (icon != null) {
                     Icon(icon, null, tint = fg, modifier = Modifier.size(20.dp))
-                    Spacer(Modifier.width(8.dp))
+                    Spacer(Modifier.width(Space.s))
                 }
-                Text(l, color = fg, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
+                Text(l, color = fg, style = VlType.Button)
             }
         }
     }
@@ -269,7 +273,7 @@ fun RoundButton(icon: ImageVector, desc: String, size: Dp, filled: Boolean, onCl
         Modifier.size(size).graphicsLayer { scaleX = scale; scaleY = scale }
             .clip(CircleShape)
             .background(if (filled) Vl.Volt else Vl.GlassStrong)
-            .border(1.dp, if (filled) Color.Transparent else Vl.Stroke, CircleShape)
+            .border(BorderWidth, if (filled) Color.Transparent else Vl.Stroke, CircleShape)
             .clickable(interaction, indication = null, onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
@@ -304,7 +308,7 @@ fun SignalBars(level: Int, color: Color = Vl.Volt, modifier: Modifier = Modifier
     Row(modifier, horizontalArrangement = Arrangement.spacedBy(3.dp), verticalAlignment = Alignment.Bottom) {
         for (i in 0 until 4) {
             val lit = i < level
-            val c by animateColorAsState(if (lit) color else Vl.TextFaint.copy(alpha = 0.5f), tween(400, delayMillis = i * 60), label = "bar$i")
+            val c by animateColorAsState(if (lit) color else Vl.Decor, tween(400, delayMillis = i * 60), label = "bar$i")
             Box(Modifier.weight(1f).fillMaxHeight(0.3f + 0.7f * (i + 1) / 4f).clip(RoundedCornerShape(2.dp)).background(c))
         }
     }
@@ -351,13 +355,13 @@ fun Gap(h: Dp) = Spacer(Modifier.height(h))
 /** Small two-line metric used in the telemetry tiles. */
 @Composable
 fun Metric(label: String, value: String, modifier: Modifier = Modifier, visual: @Composable () -> Unit) {
-    GlassCard(modifier, padding = 14.dp) {
-        Box(Modifier.height(20.dp), contentAlignment = Alignment.CenterStart) { visual() }
-        Gap(12.dp)
+    GlassCard(modifier, padding = Space.m) {
+        Box(Modifier.height(24.dp), contentAlignment = Alignment.CenterStart) { visual() }
+        Gap(Space.s)
         AnimatedContent(value, transitionSpec = { fadeIn(tween(300)) togetherWith fadeOut(tween(200)) }, label = "metric") {
-            Text(it, color = Vl.Text, fontWeight = FontWeight.Bold, fontSize = 18.sp, maxLines = 1)
+            Text(it, color = Vl.Text, style = VlType.Metric, maxLines = 1)
         }
-        Text(label, color = Vl.TextDim, fontSize = 12.sp, maxLines = 1)
+        Text(label, color = Vl.TextDim, style = VlType.Caption, maxLines = 1)
     }
 }
 
