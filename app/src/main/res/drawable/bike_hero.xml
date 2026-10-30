@@ -1,0 +1,56 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="260dp" android:height="140dp"
+    android:viewportWidth="400" android:viewportHeight="215">
+
+    <!-- rear wheel -->
+    <path android:fillColor="#111111" android:fillType="evenOdd"
+        android:pathData="M96,150 m-42,0 a42,42 0 1,0 84,0 a42,42 0 1,0 -84,0
+                          M96,150 m-20,0 a20,20 0 1,1 40,0 a20,20 0 1,1 -40,0 Z"/>
+    <!-- front wheel -->
+    <path android:fillColor="#111111" android:fillType="evenOdd"
+        android:pathData="M312,150 m-42,0 a42,42 0 1,0 84,0 a42,42 0 1,0 -84,0
+                          M312,150 m-20,0 a20,20 0 1,1 40,0 a20,20 0 1,1 -40,0 Z"/>
+
+    <!-- hubs -->
+    <path android:fillColor="#111111" android:pathData="M96,150 m-6,0 a6,6 0 1,0 12,0 a6,6 0 1,0 -12,0 Z"/>
+    <path android:fillColor="#111111" android:pathData="M312,150 m-6,0 a6,6 0 1,0 12,0 a6,6 0 1,0 -12,0 Z"/>
+
+    <!-- swingarm -->
+    <path android:fillColor="#111111"
+        android:pathData="M150,128 L98,146 L96,154 L152,138 Z"/>
+    <!-- front forks -->
+    <path android:fillColor="#111111"
+        android:pathData="M300,96 L314,150 L306,150 L292,100 Z"/>
+
+    <!-- body: tail, seat, tank, fairing, windscreen -->
+    <path android:fillColor="#111111"
+        android:pathData="M58,120
+            C56,102 74,94 96,98
+            L132,84
+            C150,78 176,78 196,84
+            C216,70 240,66 266,74
+            C288,80 300,74 322,98
+            L352,108
+            C359,111 357,122 345,124
+            L302,128
+            C280,133 248,132 220,130
+            L150,128
+            C118,126 86,128 70,134
+            C62,131 58,126 58,120 Z"/>
+
+    <!-- seat hump accent -->
+    <path android:fillColor="#111111"
+        android:pathData="M96,98 C104,90 120,88 132,92 L128,100 C116,97 104,98 98,104 Z"/>
+
+    <!-- windscreen -->
+    <path android:fillColor="#111111"
+        android:pathData="M322,98 L352,78 L360,84 L352,108 Z"/>
+
+    <!-- mirror stalk -->
+    <path android:fillColor="#111111"
+        android:pathData="M336,86 L352,70 L356,74 L342,90 Z"/>
+
+    <!-- exhaust -->
+    <path android:fillColor="#111111"
+        android:pathData="M150,132 L214,138 L214,146 L150,142 Z"/>
+</vector>
