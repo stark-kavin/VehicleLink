@@ -76,6 +76,11 @@ object VehicleBus {
     private val _outbound = MutableSharedFlow<ByteArray>(extraBufferCapacity = 128)
     val outbound: SharedFlow<ByteArray> = _outbound.asSharedFlow()
 
+    /** True while the service is waiting for the last bike to advertise again (auto-reconnect scan). */
+    private val _reconnecting = MutableStateFlow(false)
+    val reconnecting: StateFlow<Boolean> = _reconnecting.asStateFlow()
+    fun setReconnecting(b: Boolean) { _reconnecting.value = b }
+
     fun setConn(c: Conn) { _conn.value = c }
     fun setStatus(s: String) { _status.value = s }
 

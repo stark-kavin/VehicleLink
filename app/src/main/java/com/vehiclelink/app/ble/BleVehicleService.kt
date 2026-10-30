@@ -62,8 +62,11 @@ class BleVehicleService : LifecycleService() {
     private var filterPrefix: String = BleConstants.DEFAULT_NAME_FILTER
 
     // Auto-reconnect (mirrors the original): MAC-filtered scan with no timeout, connect 2 s after a hit.
+    // Both publish to VehicleBus.reconnecting so the UI can say "Waiting for your bike".
     private var reconnectScanning = false
+        set(v) { field = v; VehicleBus.setReconnecting(v || reconnectPending) }
     private var reconnectPending = false
+        set(v) { field = v; VehicleBus.setReconnecting(v || reconnectScanning) }
     private val prefs by lazy { getSharedPreferences("vehicle_link", Context.MODE_PRIVATE) }
 
     private val adapterStateReceiver = object : BroadcastReceiver() {
@@ -118,7 +121,14 @@ class BleVehicleService : LifecycleService() {
         super.onStartCommand(intent, flags, startId)
         when (intent?.action) {
             ACTION_SCAN -> { filterPrefix = intent.getStringExtra(EXTRA_FILTER) ?: ""; startScan() }
-            ACTION_STOP_SCAN -> stopScan()
+            // User cancelled the search: drop straight back to idle instead of waiting for the 12 s timer.
+            ACTION_STOP_SCAN -> {
+                stopScan()
+                if (VehicleBus.conn.value == VehicleBus.Conn.SCANNING) {
+                    VehicleBus.setConn(VehicleBus.Conn.DISCONNECTED)
+                    VehicleBus.setStatus("Not connected")
+                }
+            }
             ACTION_CONNECT -> intent.getStringExtra(EXTRA_ADDRESS)?.let { connectAddress(it) }
             // Quick Settings tile "on": go back to the last bike; if it's off, the reconnect scan waits for it.
             ACTION_RESUME -> lastBike(this)?.let { if (gatt == null && !reconnectPending) connectAddress(it) }
@@ -692,6 +702,8 @@ class BleVehicleService : LifecycleService() {
             Intent(ctx, BleVehicleService::class.java).setAction(ACTION_SCAN).putExtra(EXTRA_FILTER, filterPrefix))
         fun connect(ctx: Context, address: String) = ctx.startForegroundService(
             Intent(ctx, BleVehicleService::class.java).setAction(ACTION_CONNECT).putExtra(EXTRA_ADDRESS, address))
+        fun stopScan(ctx: Context) = ctx.startForegroundService(
+            Intent(ctx, BleVehicleService::class.java).setAction(ACTION_STOP_SCAN))
         fun disconnect(ctx: Context) = ctx.startForegroundService(
             Intent(ctx, BleVehicleService::class.java).setAction(ACTION_DISCONNECT))
     }
