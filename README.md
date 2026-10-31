@@ -1,74 +1,152 @@
 # VehicleLink
 
-A lean Android companion app for a connected two-wheeler. It keeps only what the
-cluster actually needs and drops the server/analytics stack of the original app
-(KOGO, Hero APIM, Mappls IoT, Netcore/Smartech, Hansel, Adobe, Dynatrace).
+A lean Android companion app for the **Hero Karizma XMR** instrument cluster. It talks to the bike's
+dashboard over Bluetooth Low Energy and shows your calls, music, Google Maps turn-by-turn directions and
+phone status on it, without the account, cloud services and analytics of the official app.
 
-## What it does
-- **Phone ↔ vehicle over BLE** (Nordic-UART). Phone is GATT central; the vehicle
-  (e.g. ESP32) is the peripheral. Foreground service keeps the link alive.
-- **Music controls** both ways: reads the active media session (Spotify, YT Music,
-  …) for title/artist/state, and applies **NEXT / PREV / PLAY-PAUSE** sent from the
-  handlebar buttons.
-- **Turn-by-turn from the phone's Google Maps app.** Start directions in Google
-  Maps as normal; VehicleLink catches the live guidance and streams the next
-  maneuver + distance + road to the vehicle display.
-- **On-device Google Maps** (Maps SDK for Android) in-app, replacing Mappls.
+The cluster protocol was worked out by studying the official Hero app (see
+[docs/original-app-analysis.md](docs/original-app-analysis.md)); VehicleLink re-implements the same
+behaviour and packet formats in its own code.
 
-## How the Google Maps turn-by-turn capture works
-Google Maps has no public "give me current guidance" API. While it navigates it
-posts an *ongoing notification* carrying the next maneuver, distance and road.
-`CompanionListenerService` (a `NotificationListenerService`) reads that
-notification and `MapsNavParser` extracts the fields. The same notification-access
-grant is also what authorizes `MediaSessionManager`, so one permission powers both
-navigation capture and music control.
+> Not affiliated with, endorsed by or supported by Hero MotoCorp. Built for personal use and
+> interoperability with a bike you own. Use at your own risk; don't operate the app while riding.
 
-**Trade-offs / honesty:**
-- The notification layout varies by locale and Maps version, so parsing is
-  heuristic. The raw text is always forwarded too, so the cluster can fall back to
-  showing it verbatim. Tune `MapsNavParser` against your locale.
-- Maneuver *icons* aren't reliably exposed; we send text. If you need turn arrows,
-  map the maneuver string to icons on the vehicle side, or move to the paid
-  **Google Navigation SDK** for a fully in-app routed experience.
-- This reads Google Maps' own output; it doesn't re-route or re-brand Google's
-  data. It's the same mechanism aftermarket moto displays use.
+<p align="center">
+  <img src="docs/screenshots/home.png" width="240" alt="Home screen">
+  &nbsp;
+  <img src="docs/screenshots/settings.png" width="240" alt="Settings">
+  &nbsp;
+  <img src="docs/screenshots/test-bench-arrows.png" width="240" alt="Test bench: turn arrows">
+</p>
 
-## Setup
-1. Open in Android Studio (Koala+), JDK 17.
-2. Create an **API key** for *Maps SDK for Android* in Google Cloud Console.
-3. `cp local.properties.sample local.properties` and set `MAPS_API_KEY=...`
-   (restrict the key to your package + signing SHA-1).
-4. Run on a device (BLE + media sessions don't work on the emulator).
-5. In the app: **Enable notification access**, grant Bluetooth + Location, tap
-   **Connect vehicle**.
-6. Flash `firmware/esp32_vehiclelink.ino` to the vehicle controller (advertise a
-   name starting `VEHICLE`).
+## Features
 
-## BLE protocol (newline-delimited UTF-8)
-Phone → vehicle:
-```
-N|<maneuver>|<distance>|<road>     e.g.  N|Turn right|450 m|MG Road
-NX                                 navigation ended
-M|<1|0>|<title>|<artist>|<pos>|<dur>   1=playing, pos/dur in seconds
-P|<ms>                             heartbeat
-```
-Vehicle → phone:
-```
-C|NEXT   C|PREV   C|PLAYPAUSE   C|PLAY   C|PAUSE
-```
+**On the bike's display**
+- **Turn-by-turn navigation** from the Google Maps app on your phone: the next turn arrow, distance,
+  road name, arrival time and distance left. The arrow letters match the official app's table, and the
+  bike keeps showing directions while you're stopped. A final "arrived" or "cancelled" packet clears it.
+- **GPS-lost warning** while navigating: the cluster's no-signal mark appears when your phone's GPS is off,
+  Google Maps is searching for GPS, or there's been no fix for more than 10 seconds.
+- **Calls**: caller name for incoming calls, a running timer for ongoing and outgoing calls, and a
+  "call ended" packet when you hang up.
+- **Music**: song, artist, play/pause state, volume and a live progress bar for whatever app is playing
+  (Spotify, YouTube Music, …).
+- **Phone status**: battery level and mobile signal bars.
+- **Missed-call and SMS counters** for the current ride. Only the count of messages is used; their
+  contents are never read.
 
-## Module map
-| File | Role |
+**From the bike's handlebar buttons**
+- Answer and reject calls (each can be switched off).
+- Optional **confirm before rejecting**: the first press shows `Press again 5` counting down on the bike;
+  only a second press within 5 seconds rejects the call.
+- Optional **text the caller** with your own message after rejecting from the bike.
+- Play/pause, next and previous track, music and call volume.
+
+**In the app**
+- **Your vehicles**: every bike you've connected to, with rename and forget. New bikes are added from a
+  pop-up sheet that searches nearby, explains what to do when nothing is found, and handles Bluetooth
+  being off.
+- **Automatic reconnect**: if the bike is switched off or goes out of range, the app keeps watching for it
+  and reconnects about 2 seconds after it powers back up, the same way the official app does.
+- **Quick Settings tile** and a **Turn off** button on the notification to switch the link on and off.
+- **Test bench** for checking the bike's display without a real call, song or route: every turn arrow,
+  music, calls (including the confirm-reject countdown), battery/signal and counters, plus a raw packet
+  sender and a packet log. Everything stops as soon as you leave the screen.
+- Dark "cockpit" design with animated states, the Chakra Petch display font, and a charging indicator.
+
+<p align="center">
+  <img src="docs/screenshots/test-bench-phone.png" width="240" alt="Test bench: phone status and counters">
+</p>
+
+## Status
+
+| Area | State |
 |---|---|
-| `core/VehicleBus.kt` | in-memory hub wiring listener ↔ media ↔ BLE |
-| `core/Protocol.kt` | line-protocol encode |
-| `ble/BleVehicleService.kt` | foreground GATT central, scan/connect/write, inbound buttons |
-| `listener/CompanionListenerService.kt` | notification listener (nav + media auth) |
-| `nav/MapsNavParser.kt` | parse Google Maps guidance notification |
-| `media/MediaHub.kt` | active media session read + transport control |
-| `ui/VehicleLinkScreen.kt` | map + status + now-playing + nav card |
-| `firmware/esp32_vehiclelink.ino` | reference peripheral |
+| BLE connection, handshake, reconnect | Implemented to match the official app; reconnect after a bike power-cycle **not yet tested on the bike** |
+| Music packet | Confirmed working on the bike earlier; progress-bar fix not yet re-tested on the bike |
+| Calls, counters, GPS flag, navigation arrows | Packet formats verified offline against the official app's code; **not yet tested on the bike** |
+| Google Maps parsing | Checked against a real Google Maps navigation notification (English, Oct 2026) |
+| What each arrow letter draws on the cluster | Unknown until checked with the Test bench |
 
-## Not included (by design)
-No app backend, accounts, telemetry upload, geofencing-as-a-service, or push
-SDKs. Everything stays on the phone except BLE frames to your vehicle.
+Open questions and anything inferred rather than seen are listed in
+[docs/original-app-analysis.md §11](docs/original-app-analysis.md).
+
+## How it works
+
+```
+ Google Maps notification ─┐
+ Media sessions ───────────┤                               BLE (Telit TIO UART, MTU 65)
+ Phone calls / SMS ────────┼──► VehicleBus ──► BleVehicleService ─────────────────────────► Cluster
+ Battery / signal ─────────┘        ▲              │  ▲                                        │
+                                    │              │  └── handlebar buttons (notify) ◄─────────┘
+                            Compose UI ◄───────────┘
+```
+
+- **Connection**: the cluster advertises as `MCU…` and exposes a Telit TIO serial-over-BLE service
+  (`e837d9a2-9c49-4493-9547-8e6918a59ca8`). After connecting, the app discovers services, requests an
+  MTU of 65, enables the credit and data channels, grants 10 credits, then starts sending.
+- **Packets** are short ASCII strings wrapped in `\n…\n`. The first character is the type:
+  `9` music, `7` call, `1` navigation, `3` battery/signal, `5` missed calls, `6` SMS.
+  A sender loop runs every 800 ms, like the official app.
+- **Turn-by-turn** comes from Google Maps' own ongoing navigation notification (read with notification
+  access), so there's no routing in the app and no Maps API cost.
+
+Full details: [PROTOCOL.md](PROTOCOL.md) and [docs/original-app-analysis.md](docs/original-app-analysis.md).
+
+## Build and install
+
+Requirements: Android Studio (Koala or newer) or Gradle 8.9 with **JDK 17–21**, Android SDK 34.
+The app runs on Android 8.0+ and has been used on Android 17.
+
+```bash
+cp local.properties.sample local.properties   # then set sdk.dir (and optionally MAPS_API_KEY)
+gradle :app:assembleDebug
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+```
+
+There is no Gradle wrapper script in the repo yet; open the project in Android Studio or use a local
+Gradle 8.9. `MAPS_API_KEY` (Maps SDK for Android) is only needed for the optional in-app map card;
+turn-by-turn on the bike works without it.
+
+## First run
+
+1. Allow the permissions the app asks for (nearby devices, phone, contacts, call log, notifications, SMS).
+2. **Notification access** (Settings → Notification access): needed for music and Google Maps directions.
+3. **Battery optimisation** (the "Keep the bike link alive" card): lets the link survive in the background.
+4. Switch the bike's ignition on, tap **Add your vehicle**, and pick your bike (it shows as "Hero bike
+   dashboard"). It's saved to **Your vehicles** once connected.
+5. Optional: add the **VehicleLink** tile to Quick Settings.
+
+## Permissions
+
+| Permission | Used for |
+|---|---|
+| Nearby devices (Bluetooth scan/connect), location on Android ≤ 11 | Finding and connecting to the bike |
+| Foreground service (connected device, location) | Keeping the link alive; watching GPS while navigating |
+| Phone state, call log, contacts | Caller name and call state for the bike |
+| Answer phone calls | Answer / reject from the handlebar |
+| Receive SMS | New-SMS counter (count only) |
+| Send SMS | Optional "text the caller when you reject" (off by default) |
+| Notification access | Google Maps directions and music control |
+| Ignore battery optimisations | Optional, asked from the app |
+
+## Project structure
+
+| Path | What's there |
+|---|---|
+| `app/.../ble/BleVehicleService.kt` | Foreground service: scan, connect, TIO handshake, reconnect, 800 ms sender, handlebar commands |
+| `app/.../ble/VehicleLinkTileService.kt` | Quick Settings on/off tile |
+| `app/.../core/ClusterProtocol.kt` | Builds every cluster packet (music, call, navigation, status, counters) |
+| `app/.../core/VehicleBus.kt` | In-memory state shared between the service, receivers and UI |
+| `app/.../core/AppSettings.kt`, `VehicleStore.kt` | User settings and saved vehicles |
+| `app/.../nav/MapsNavParser.kt` | Reads Google Maps' navigation notification |
+| `app/.../media/MediaHub.kt` | Active media session: track info and transport controls |
+| `app/.../phone/CallReceiver.kt`, `SmsReceiver.kt` | Call state, missed calls, SMS count |
+| `app/.../ui/` | Compose UI: home, vehicles and add sheet (`Garage.kt`), settings, test bench, theme |
+| `firmware/esp32_vehiclelink.ino` | Reference ESP32 peripheral for bench testing (older line protocol) |
+| `docs/` | Protocol analysis of the official app, screenshots, licences |
+
+## Credits
+
+- Display font: [Chakra Petch](https://github.com/m4rc1e/Chakra-Petch) by Cadson Demak, SIL Open Font
+  License 1.1 ([licence](docs/licenses/ChakraPetch-OFL.txt)).
