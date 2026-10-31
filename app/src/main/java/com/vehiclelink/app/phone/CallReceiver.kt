@@ -26,7 +26,9 @@ class CallReceiver : BroadcastReceiver() {
         when (state) {
             TelephonyManager.EXTRA_STATE_RINGING -> {
                 val who = resolveName(context, number) ?: "Unknown"
-                VehicleBus.setCall(VehicleBus.CallInfo(ringing = true, active = false, name = who))
+                VehicleBus.setCall(
+                    VehicleBus.CallInfo(ringing = true, active = false, name = who, number = number.orEmpty())
+                )
             }
             TelephonyManager.EXTRA_STATE_OFFHOOK -> {
                 val cur = VehicleBus.call.value
@@ -35,10 +37,19 @@ class CallReceiver : BroadcastReceiver() {
                 val outgoing = cur?.ringing != true
                 val who = if (outgoing) resolveName(context, number) ?: "Unknown" else cur!!.name
                 VehicleBus.setCall(
-                    VehicleBus.CallInfo(ringing = false, active = true, name = who, outgoing = outgoing)
+                    VehicleBus.CallInfo(
+                        ringing = false, active = true, name = who, outgoing = outgoing,
+                        number = if (outgoing) number.orEmpty() else cur!!.number,
+                    )
                 )
             }
-            TelephonyManager.EXTRA_STATE_IDLE -> VehicleBus.setCall(null)
+            TelephonyManager.EXTRA_STATE_IDLE -> {
+                // Rang but was never picked up (incl. rejected) = missed, like the original's onCallReject.
+                // The duplicate IDLE broadcast finds the call already cleared, so it isn't counted twice.
+                val cur = VehicleBus.call.value
+                if (cur != null && cur.ringing && !cur.active) VehicleBus.addMissedCall()
+                VehicleBus.setCall(null)
+            }
         }
     }
 

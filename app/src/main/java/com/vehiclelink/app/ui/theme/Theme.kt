@@ -6,7 +6,10 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.Font
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import com.vehiclelink.app.R
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
@@ -56,19 +59,31 @@ object Radius {
 val BorderWidth = 1.dp
 
 /**
+ * Chakra Petch (SIL OFL 1.1, bundled in res/font; licence in docs/licenses): angular, instrument-cluster
+ * letterforms for headings, numbers, buttons and labels. Body and caption text stay on the system font so
+ * small text remains easy to read.
+ */
+val ChakraPetch = FontFamily(
+    Font(R.font.chakra_petch_regular, FontWeight.Normal),
+    Font(R.font.chakra_petch_medium, FontWeight.Medium),
+    Font(R.font.chakra_petch_semibold, FontWeight.SemiBold),
+    Font(R.font.chakra_petch_bold, FontWeight.Bold),
+)
+
+/**
  * Type scale (sp): Display 28 · Title 20 · Headline-row 17 · Body 15 · Label 13 · Caption 12 · Overline 11.
  * Every Text in the home screen uses one of these.
  */
 object VlType {
-    val Display = TextStyle(fontSize = 28.sp, lineHeight = 34.sp, fontWeight = FontWeight.Bold, letterSpacing = (-0.5).sp)
-    val Title = TextStyle(fontSize = 20.sp, lineHeight = 26.sp, fontWeight = FontWeight.Bold, letterSpacing = (-0.2).sp)
-    val RowTitle = TextStyle(fontSize = 17.sp, lineHeight = 22.sp, fontWeight = FontWeight.SemiBold)
+    val Display = TextStyle(fontFamily = ChakraPetch, fontSize = 30.sp, lineHeight = 36.sp, fontWeight = FontWeight.Bold)
+    val Title = TextStyle(fontFamily = ChakraPetch, fontSize = 21.sp, lineHeight = 26.sp, fontWeight = FontWeight.Bold)
+    val RowTitle = TextStyle(fontFamily = ChakraPetch, fontSize = 17.sp, lineHeight = 22.sp, fontWeight = FontWeight.SemiBold)
     val Body = TextStyle(fontSize = 15.sp, lineHeight = 20.sp, fontWeight = FontWeight.Normal)
-    val Label = TextStyle(fontSize = 13.sp, lineHeight = 18.sp, fontWeight = FontWeight.Medium)
+    val Label = TextStyle(fontFamily = ChakraPetch, fontSize = 14.sp, lineHeight = 18.sp, fontWeight = FontWeight.SemiBold)
     val Caption = TextStyle(fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.Normal)
-    val Overline = TextStyle(fontSize = 11.sp, lineHeight = 14.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.6.sp)
-    val Metric = TextStyle(fontSize = 20.sp, lineHeight = 24.sp, fontWeight = FontWeight.Bold)
-    val Button = TextStyle(fontSize = 16.sp, lineHeight = 20.sp, fontWeight = FontWeight.SemiBold)
+    val Overline = TextStyle(fontFamily = ChakraPetch, fontSize = 12.sp, lineHeight = 14.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.8.sp)
+    val Metric = TextStyle(fontFamily = ChakraPetch, fontSize = 22.sp, lineHeight = 26.sp, fontWeight = FontWeight.Bold)
+    val Button = TextStyle(fontFamily = ChakraPetch, fontSize = 17.sp, lineHeight = 20.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.3.sp)
 }
 
 private val DarkColors = darkColorScheme(
@@ -90,10 +105,12 @@ private val DarkColors = darkColorScheme(
 
 private val Type = Typography().run {
     copy(
-        displaySmall = displaySmall.copy(fontWeight = FontWeight.Bold, letterSpacing = (-0.5).sp),
-        headlineMedium = headlineMedium.copy(fontWeight = FontWeight.Bold, letterSpacing = (-0.4).sp),
-        titleLarge = titleLarge.copy(fontWeight = FontWeight.SemiBold, letterSpacing = (-0.2).sp),
-        labelSmall = TextStyle(fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.6.sp),
+        displaySmall = displaySmall.copy(fontFamily = ChakraPetch, fontWeight = FontWeight.Bold),
+        headlineMedium = headlineMedium.copy(fontFamily = ChakraPetch, fontWeight = FontWeight.Bold),
+        titleLarge = titleLarge.copy(fontFamily = ChakraPetch, fontWeight = FontWeight.Bold),
+        titleMedium = titleMedium.copy(fontFamily = ChakraPetch, fontWeight = FontWeight.SemiBold),
+        labelLarge = labelLarge.copy(fontFamily = ChakraPetch, fontWeight = FontWeight.SemiBold),
+        labelSmall = TextStyle(fontFamily = ChakraPetch, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.6.sp),
     )
 }
 

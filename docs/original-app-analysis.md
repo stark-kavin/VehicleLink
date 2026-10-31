@@ -350,3 +350,70 @@ on 9+ the caller number needs `READ_CALL_LOG`; on 13+ the foreground notificatio
 - Music text: we replace non-ASCII with `?`; the original removes anything outside `[A-Za-z0-9 +-._]`.
 - `CP1252` constant is actually UTF-8 (harmless for the filtered ASCII, but misleading).
 - **Battery % and signal bars are not sent at all** — packet type 3 is missing.
+
+---
+
+## 13. Navigation (packet type 1) — added after the first pass
+
+**Sources** [seen]: `views/fragments/quickAction/NavigateFragment` (`sendDataToSpeedoMeter`, `setDirBinary`,
+`updateNavigationData`, `startNavSender`, `handleNavigationFinished/Cancelled`, `getRoadName`,
+`roundAboutExit`), `thorwrapper/rideguidewrapper/NavigationPacket.toPacketString`,
+`com.mappls.sdk.plugin.directions.DirectionsUtils.getManeuverId`, the bundled
+`translations/mappls-directions-en_short_instructions.json`, and `com.google.gson.internal.e.b` (roundabout IDs).
+`setDirBinary` was re-decompiled with `jadx -m simple` because the default output mangled the string switch.
+
+**Packet** (`"\n" + body + "\n"`, body 48 bytes) — field order unchanged from §5 / PROTOCOL.md.
+For the music-feature cluster (`app_type` is always 191) the full form is sent [seen]:
+
+| Field | Value |
+|---|---|
+| dir | maneuver letter (table below); **lower-case when < 200 m** to the turn |
+| distance / unit | distance to the turn, `"00450"` + `1` (m) or `"001.2"` + `k` (`ContextExtKt.D`) |
+| ETA | `hh` (12-hour) + **`a`/`p`** + `mm` + **`m`** — lower-case for this cluster |
+| roundabout | exit `01`..`09` when the text has both "Nth" and "exit", else `00` |
+| noSignal | `1` while GPS is lost, else `0` |
+| remain dist / unit | trip remainder: ≤ 999 m `%05d` + `1`; else km `%05.1f` (`%05.0f` when whole) + `k` |
+| remainTime | always `~~~~` |
+| nextDir | always `~` |
+| secondRoundabout | always **`04`** |
+| road | current step name, `~`-padded to 18 (the original appends a 19th `~` when the name is > 18 chars — treated as a bug, we cut to 18) |
+
+**Maneuver → letter** (Mappls maneuver ID from the short-instruction templates → `setDirBinary`) [seen]:
+
+| Maneuver | ID | Letter |
+|---|---|---|
+| turn left / arrive left / end of road left | 0, 9, 13 | `I` |
+| turn right / arrive right / end of road right | 3, 10, 14 | `J` |
+| slight left / slight right | 2 / 5 | `C` / `D` |
+| sharp left / sharp right (incl. fork sharp) | 1, 17 / 4, 18 | `E` / `F` |
+| keep/fork left / keep/fork right | 15, 19 / 16, 20 | `Z` / `X` |
+| straight, continue, arrive straight, fork/merge straight | 7, 8, 21, 32, 33 | `G` |
+| merge (any side) | 26–31 | `V` |
+| on/off ramp left (and unspecified) / right | 42, 44, 73, 74 / 43, 75 | `K` / `L` |
+| U-turn | 41 | `P` |
+| roundabout / rotary, left-hand traffic (exit by angle) | 65–72 (68 → `G`) | `U` |
+| ferry | 36 | `Y` |
+| compass heading (depart) / route recalculating | 51–57 / — | `B` |
+| navigation finished / cancelled | — | `H` / `G` (one final packet, distance `00000`) |
+
+**Timing** [seen]: a coroutine re-sends the latest packet **every 800 ms** while navigating
+(`startNavSender`), whether or not anything changed; finish/cancel send one last packet (`sendOneNavPacket`).
+
+### Root causes in VehicleLink (navigation)
+- `ClusterProtocol.dirCode` used the wrong letters: left `C`, right `D`, straight `I`, roundabout `B`,
+  U-turn `Z`, merge/ramp `V`. Most arrows on the bike were wrong.
+- ETA was hard-coded `12A00M` (and upper-case); trip remainder was `~`; `secondRoundabout` was `00`.
+- Navigation counted as stale 12 s after the last Maps update, so the bike fell back to music while stopped.
+  The original keeps repeating the last packet until guidance ends.
+- No final `H` / `G` packet when guidance ended.
+
+### Google Maps notification (our input) — observed on the test phone, Oct 2026
+`title "150 m · Turn left onto MG Road"`, `subText "Arrive 6:26 pm"`,
+`ProgressStyle progress=2 / progressMax=11256` (metres travelled / trip length — **inferred** from 11.3 km
+for a ~22-minute trip; not confirmed against Maps' own UI).
+
+### Navigation unknowns
+- Arrow letters are mapped by the original's logic; **what each letter draws on the cluster is not verified**.
+- Google Maps wording varies by locale and version; only English was observed. Unknown wordings fall back to `G`.
+- No-signal (`1`) is never sent: the Maps notification gives no GPS-lost signal.
+- If notification access is revoked mid-route we never see the removal, so no final packet is sent.

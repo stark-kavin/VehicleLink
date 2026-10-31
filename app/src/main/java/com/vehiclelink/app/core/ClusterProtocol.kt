@@ -1,6 +1,7 @@
 package com.vehiclelink.app.core
 
 import java.nio.charset.Charset
+import java.util.Locale
 
 /**
  * Builds the Hero cluster's ASCII (Windows-1252) packets. See PROTOCOL.md.
@@ -38,6 +39,12 @@ object ClusterProtocol {
             else -> wrap("7" + who + "2" + who + "0" + formatDur(durationSec) + volumeChar(voiceVolumePercent))
         }
     }
+
+    /** Missed-call counter, type '5': "5" + count (2 digits min), e.g. "\n503\n". Original sendMissCallData. */
+    fun missedCalls(count: Int): ByteArray = wrap("5" + "%02d".format(Locale.US, count.coerceAtLeast(0)))
+
+    /** New-SMS counter, type '6': "60" + count, e.g. "\n603\n". Original getSMSText. */
+    fun smsCount(count: Int): ByteArray = wrap("60" + count.coerceAtLeast(0))
 
     /** "No active call" packet, sent once when a call ends (state 0). */
     fun callNone(): ByteArray =
@@ -84,30 +91,63 @@ object ClusterProtocol {
      * Body = id(1) dir(1) dist(5) unit(1) etaH(2) mer(1) etaM(2) demer(1) round(2)
      *        noSig(1) remainDist(5) remainUnit(1) remainTime(4) nextDir(1) round2(2) road(18) = 48.
      */
-    fun nav(n: VehicleBus.NavInstruction): ByteArray {
+    /** @param noSignal GPS fix lost — raises the cluster's "no signal" flag (original isGpsSignalLost). */
+    fun nav(n: VehicleBus.NavInstruction, noSignal: Boolean = false): ByteArray {
         var dir = dirCode(n.maneuver)
         // Original lowercases the arrow when the turn is imminent (< 200 m).
         val meters = distanceMeters(n.distance)
-        if (meters in 1 until 200) dir = dir.lowercase()
+        if (meters in 0 until 200) dir = dir.lowercase()
         val round = exitNumber(n.maneuver + " " + n.road)
-        return wrap(navBody(dir, n.distance, n.road, round))
+        val (dist, unit) = formatDistance(n.distance)
+        val (rDist, rUnit) = formatRemaining(n.remainingM)
+        return wrap(navBody(dir, dist, unit, eta(n.etaHour, n.etaMinute), round, rDist, rUnit, field(n.road, 18), noSignal))
     }
 
-    /** Nav packet with an explicit direction letter — for the debug arrow-mapping tool. */
-    fun navRaw(dir: String, distanceText: String, road: String): ByteArray =
-        wrap(navBody(dir, distanceText, road, "00"))
+    /**
+     * Final packet when Google Maps stops guiding: 'H' = arrived, 'G' = cancelled. Mirrors the original's
+     * handleNavigationFinished / handleNavigationCancelled (distance 00000 m, remainders and road reset).
+     */
+    fun navEnd(arrived: Boolean, last: VehicleBus.NavInstruction?): ByteArray =
+        wrap(navBody(if (arrived) "H" else "G", "00000", "1", eta(last?.etaHour ?: -1, last?.etaMinute ?: -1),
+            "00", "00000", "1", "~".repeat(18)))
 
-    /** Assemble the 48-byte nav body. unit: "1"=metres, "k"=km (matches original). */
-    private fun navBody(dir: String, distanceText: String, road: String, roundabout: String): String {
+    /** Nav packet with an explicit direction letter — for the debug arrow-mapping tool. */
+    fun navRaw(dir: String, distanceText: String, road: String): ByteArray {
         val (dist, unit) = formatDistance(distanceText)
-        val d = dir.ifBlank { "I" }.substring(0, 1)
-        val rb = field2(roundabout)
-        return "1" + d + dist + unit +     // id, binaryDir, distance, unit
-            "12" + "A" + "00" + "M" +        // etaHour, meridian, etaMinute, demeridian
-            rb + "0" +                        // roundabout exit, noSignal (GPS ok)
-            "~~~~~" + "~" + "~~~~" +         // remainDistance[5], remainUnit[1], remainTime[4]
-            "~" + "00" +                      // nextBinaryDir[1], secondRoundabout[2]
-            field(road, 18)                   // roadName[18]
+        return wrap(navBody(dir, dist, unit, eta(-1, -1), "00", "~~~~~", "~", field(road, 18)))
+    }
+
+    /**
+     * Assemble the 48-byte nav body (original NavigationPacket.toPacketString, music-feature cluster):
+     * id dir dist[5] unit etaH[2] mer etaM[2] demer roundabout[2] noSignal remainDist[5] remainUnit
+     * remainTime[4] nextDir secondRoundabout[2] road[18]. unit "1" = metres, "k" = km.
+     */
+    private fun navBody(
+        dir: String, dist: String, unit: String, eta: String, roundabout: String,
+        remainDist: String, remainUnit: String, road18: String, noSignal: Boolean = false,
+    ): String {
+        val d = dir.ifBlank { "G" }.substring(0, 1)
+        return "1" + d + dist + unit +        // id, binaryDir, distance, unit
+            eta +                              // etaHour, meridian, etaMinute, demeridian (6)
+            field2(roundabout) + (if (noSignal) "1" else "0") + // roundabout exit, noSignal
+            remainDist + remainUnit + "~~~~" + // remainDistance[5], remainUnit[1], remainTime[4] (original: always ~)
+            "~" + "04" +                       // nextBinaryDir (original: ~), secondRoundabout (original constant "04")
+            road18                             // roadName[18]
+    }
+
+    /** "06" + 'p' + "26" + 'm' for 18:26. The music-feature cluster gets lower-case meridian letters. */
+    private fun eta(h24: Int, min: Int): String {
+        if (h24 !in 0..23 || min !in 0..59) return "~~~~~~"
+        val h12 = (h24 % 12).let { if (it == 0) 12 else it }
+        return "%02d".format(Locale.US, h12) + (if (h24 >= 12) "p" else "a") + "%02d".format(Locale.US, min) + "m"
+    }
+
+    /** Trip remainder: ≤ 999 m -> "%05d" + '1'; else km "%05.1f" (or "%05.0f" when whole) + 'k'. */
+    private fun formatRemaining(m: Int): Pair<String, String> {
+        if (m < 0) return "~~~~~" to "~"
+        if (m <= 999) return "%05d".format(Locale.US, m) to "1"
+        val km = Math.round(m / 100.0) / 10.0
+        return (if (km % 1.0 == 0.0) "%05.0f" else "%05.1f").format(Locale.US, km) to "k"
     }
 
     /** "450 m" -> ("00450","1");  "1.2 km" -> ("001.2","k"). unit "1"=metres, "k"=km. */
@@ -138,27 +178,38 @@ object ClusterProtocol {
         else -> "00"
     }
 
-    /** Maneuver text -> cluster arrow letter (matches the original setDirBinary letters). */
+    /**
+     * Maneuver text -> cluster arrow letter. Reproduces the original app's chain
+     * routing step -> Mappls maneuver ID (short-instruction templates) -> setDirBinary letter,
+     * for left-hand traffic (India). See docs/original-app-analysis.md §13.
+     */
     private fun dirCode(maneuver: String): String {
         val t = maneuver.lowercase()
+        val left = "left" in t
+        val right = "right" in t
         return when {
-            "u-turn" in t || "u turn" in t -> "Z"
-            "roundabout" in t || "rotary" in t -> "B"
-            "arrive" in t || "destination" in t -> "H"
-            "slight left" in t -> "E"
-            "slight right" in t -> "F"
-            "sharp left" in t -> "C"
-            "sharp right" in t -> "D"
-            "left" in t -> "C"
-            "right" in t -> "D"
-            "merge" in t || "ramp" in t || "exit" in t -> "V"
-            "head" in t || "straight" in t || "continue" in t -> "I"
-            else -> "I"
+            "u-turn" in t || "u turn" in t || "uturn" in t -> "P"          // 41
+            "roundabout" in t || "rotary" in t -> "U"                       // 65-72 (left-hand traffic)
+            "ferry" in t -> "Y"                                             // 36
+            "ramp" in t || ("exit" in t && "take" in t) ->                  // on/off ramp 42-44, 73-75
+                if (right) "L" else "K"
+            "merge" in t -> "V"                                             // 26-31
+            "keep" in t || "fork" in t || "bear" in t ->                    // fork/continue slight 15/16/19/20
+                if (right) "X" else if (left) "Z" else "G"
+            "arrive" in t || "destination" in t ->                          // 8/9/10
+                if (left) "I" else if (right) "J" else "G"
+            "slight" in t -> if (right) "D" else "C"                        // 2 / 5
+            "sharp" in t -> if (right) "F" else "E"                         // 1 / 4
+            left -> "I"                                                     // 0, 13
+            right -> "J"                                                    // 3, 14
+            else -> "G"                                                     // straight / continue / head (7, 21)
         }
     }
 
+    /** "take the 2nd exit" -> "02" (original roundAboutExit: needs both "Nth" and "exit"). */
     private fun exitNumber(text: String): String {
-        val m = Regex("""([1-9])(st|nd|rd|th)""", RegexOption.IGNORE_CASE).find(text)
+        if (!text.contains("exit", ignoreCase = true)) return "00"
+        val m = Regex("""\b([1-9])(st|nd|rd|th)\b""", RegexOption.IGNORE_CASE).find(text)
         return if (m != null) "0" + m.groupValues[1] else "00"
     }
 

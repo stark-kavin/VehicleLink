@@ -57,6 +57,8 @@ class MainActivity : ComponentActivity() {
         perms += android.Manifest.permission.ANSWER_PHONE_CALLS
         perms += android.Manifest.permission.READ_CALL_LOG
         perms += android.Manifest.permission.READ_CONTACTS
+        // SMS counter is on by default; SEND_SMS is only asked for when "text the caller" is switched on.
+        if (com.vehiclelink.app.core.AppSettings.current.smsCounter) perms += android.Manifest.permission.RECEIVE_SMS
         permLauncher.launch(perms.toTypedArray())
     }
 }

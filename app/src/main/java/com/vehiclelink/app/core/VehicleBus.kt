@@ -23,6 +23,13 @@ object VehicleBus {
         val road: String,
         val raw: String = "",
         val ts: Long = System.currentTimeMillis(),
+        /** Arrival time, 24h clock; -1 when Maps didn't show one. */
+        val etaHour: Int = -1,
+        val etaMinute: Int = -1,
+        /** Metres left on the whole trip (from the notification's progress bar); -1 = unknown. */
+        val remainingM: Int = -1,
+        /** Maps itself says it has no GPS ("Searching for GPS…"). */
+        val mapsNoGps: Boolean = false,
     )
 
     data class MediaInfo(
@@ -40,7 +47,28 @@ object VehicleBus {
         val name: String,
         /** Off-hook without a preceding ring: the cluster shows it as state '4'. */
         val outgoing: Boolean = false,
+        /** Caller's number (needed for the optional "text when rejected" reply). */
+        val number: String = "",
     )
+
+    // ---- per-ride counters shown on the cluster (original resets both on connect/disconnect) ----
+    private val _missedCalls = MutableStateFlow(0)
+    val missedCalls: StateFlow<Int> = _missedCalls.asStateFlow()
+    fun addMissedCall() { _missedCalls.value += 1 }
+
+    private val _smsCount = MutableStateFlow(0)
+    val smsCount: StateFlow<Int> = _smsCount.asStateFlow()
+    fun addSms() { _smsCount.value += 1 }
+
+    /**
+     * Confirm-reject window: elapsedRealtime() deadline after the first reject press, 0 when none.
+     * While it's open the bike shows "Press again N" in place of the caller's name.
+     */
+    private val _rejectPendingUntil = MutableStateFlow(0L)
+    val rejectPendingUntil: StateFlow<Long> = _rejectPendingUntil.asStateFlow()
+    fun setRejectPending(until: Long) { _rejectPendingUntil.value = until }
+
+    fun resetRideCounters() { _missedCalls.value = 0; _smsCount.value = 0 }
 
     data class ScanDevice(
         val address: String,
@@ -80,6 +108,11 @@ object VehicleBus {
     private val _reconnecting = MutableStateFlow(false)
     val reconnecting: StateFlow<Boolean> = _reconnecting.asStateFlow()
     fun setReconnecting(b: Boolean) { _reconnecting.value = b }
+
+    /** Address of the vehicle we're connected or connecting to (null when idle). */
+    private val _activeAddress = MutableStateFlow<String?>(null)
+    val activeAddress: StateFlow<String?> = _activeAddress.asStateFlow()
+    fun setActiveAddress(a: String?) { _activeAddress.value = a }
 
     fun setConn(c: Conn) { _conn.value = c }
     fun setStatus(s: String) { _status.value = s }
@@ -131,9 +164,24 @@ object VehicleBus {
     val debugStream: StateFlow<ByteArray?> = _debugStream.asStateFlow()
     fun setDebugStream(b: ByteArray?) { _debugStream.value = b }
 
+    /** True only while the debug screen is open; nothing debug-related runs otherwise. */
+    private val _debugActive = MutableStateFlow(false)
+    val debugActive: StateFlow<Boolean> = _debugActive.asStateFlow()
+
+    /** Enter/leave debug. Leaving stops any test stream or hold and drops the log. */
+    fun setDebugActive(on: Boolean) {
+        _debugActive.value = on
+        if (!on) {
+            _debugStream.value = null
+            _debugHold.value = false
+            _log.value = emptyList()
+        }
+    }
+
     private val _log = MutableStateFlow<List<String>>(emptyList())
     val log: StateFlow<List<String>> = _log.asStateFlow()
     fun addLog(line: String) {
+        if (!_debugActive.value) return
         val l = ArrayList<String>(_log.value)
         l.add(0, line)
         while (l.size > 40) l.removeAt(l.size - 1)

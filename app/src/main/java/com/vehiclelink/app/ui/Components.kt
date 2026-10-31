@@ -57,6 +57,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -68,6 +70,7 @@ import com.vehiclelink.app.core.VehicleBus
 import com.vehiclelink.app.ui.theme.BorderWidth
 import com.vehiclelink.app.ui.theme.Radius
 import com.vehiclelink.app.ui.theme.Space
+import com.vehiclelink.app.ui.theme.ChakraPetch
 import com.vehiclelink.app.ui.theme.Vl
 import com.vehiclelink.app.ui.theme.VlType
 
@@ -286,9 +289,13 @@ fun RoundButton(icon: ImageVector, desc: String, size: Dp, filled: Boolean, onCl
 
 /** Battery glyph with an animated fill; colour shifts to amber / coral when low. */
 @Composable
-fun BatteryGlyph(percent: Int, modifier: Modifier = Modifier.size(width = 30.dp, height = 16.dp)) {
+fun BatteryGlyph(percent: Int, charging: Boolean = false, modifier: Modifier = Modifier.size(width = 30.dp, height = 16.dp)) {
     val f by animateFloatAsState(percent.coerceIn(0, 100) / 100f, tween(800), label = "batt")
-    val col = when { percent <= 15 -> Vl.Coral; percent <= 30 -> Vl.Amber; else -> Vl.Volt }
+    // Charging always reads as healthy (volt); otherwise amber / coral when low.
+    val col by animateColorAsState(
+        when { charging -> Vl.Volt; percent <= 15 -> Vl.Coral; percent <= 30 -> Vl.Amber; else -> Vl.Volt },
+        tween(400), label = "battCol")
+    val bolt by animateFloatAsState(if (charging) 1f else 0f, tween(300), label = "bolt")
     Canvas(modifier) {
         val nub = 3.dp.toPx()
         val body = Size(size.width - nub, size.height)
@@ -299,6 +306,16 @@ fun BatteryGlyph(percent: Int, modifier: Modifier = Modifier.size(width = 30.dp,
         val inset = 3.dp.toPx()
         drawRoundRect(col, topLeft = Offset(inset, inset),
             size = Size((body.width - inset * 2) * f, body.height - inset * 2), cornerRadius = CornerRadius(2.dp.toPx()))
+        if (bolt > 0f) {
+            // Lightning bolt centred on the body, outlined in the background colour so it reads over any fill.
+            val w = body.width; val h = body.height
+            val p = Path().apply {
+                moveTo(w * 0.56f, h * 0.06f); lineTo(w * 0.30f, h * 0.56f); lineTo(w * 0.48f, h * 0.56f)
+                lineTo(w * 0.42f, h * 0.94f); lineTo(w * 0.70f, h * 0.42f); lineTo(w * 0.52f, h * 0.42f); close()
+            }
+            drawPath(p, Vl.Bg.copy(alpha = bolt), style = Stroke(2.5.dp.toPx(), join = StrokeJoin.Round))
+            drawPath(p, Vl.Text.copy(alpha = bolt))
+        }
     }
 }
 
@@ -381,6 +398,6 @@ fun Avatar(initial: String, color: Color, ringing: Boolean) {
             Modifier.size(46.dp).clip(CircleShape)
                 .background(Brush.linearGradient(listOf(color, color.copy(alpha = 0.55f)))),
             contentAlignment = Alignment.Center
-        ) { Text(initial, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp) }
+        ) { Text(initial, color = Color.White, fontFamily = ChakraPetch, fontWeight = FontWeight.Bold, fontSize = 20.sp) }
     }
 }

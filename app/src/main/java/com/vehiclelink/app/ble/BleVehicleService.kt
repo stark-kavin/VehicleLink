@@ -24,7 +24,13 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.os.BatteryManager
 import android.provider.Settings
+import android.telephony.SmsManager
 import android.telephony.TelephonyManager
+import android.location.LocationListener
+import android.location.LocationManager
+import android.os.SystemClock
+import com.vehiclelink.app.core.AppSettings
+import com.vehiclelink.app.core.VehicleStore
 import android.content.pm.PackageManager
 import android.media.AudioManager
 import android.telecom.TelecomManager
@@ -108,6 +114,7 @@ class BleVehicleService : LifecycleService() {
         registerReceiver(adapterStateReceiver, IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED))
         // A restarted (START_STICKY) service resumes reconnecting to the last bike.
         targetAddress = prefs.getString(PREF_LAST_ADDRESS, null)
+        VehicleBus.setActiveAddress(targetAddress)
         if (targetAddress != null && VehicleBus.conn.value == VehicleBus.Conn.DISCONNECTED) startReconnectScan()
         lifecycleScope.launch { VehicleBus.outbound.collectLatest { if (!clusterMode) enqueueUart(it) } }
         lifecycleScope.launch {
@@ -258,6 +265,7 @@ class BleVehicleService : LifecycleService() {
         stopScan(); stopReconnectScan(); cleanupGatt()
         VehicleBus.clearDiscovered()
         targetAddress = address
+        VehicleBus.setActiveAddress(address)
         prefs.edit().putString(PREF_LAST_ADDRESS, address).putString(PREF_LAST_BIKE, address).apply()
         val device: BluetoothDevice = try { a.getRemoteDevice(address) }
         catch (e: IllegalArgumentException) { VehicleBus.setStatus("Bad device address"); return }
@@ -276,6 +284,8 @@ class BleVehicleService : LifecycleService() {
                 if (g !== gatt) { if (hasBlePerms()) g.close(); return } // stale callback
                 VehicleBus.setConn(VehicleBus.Conn.DISCONNECTED)
                 VehicleBus.setStatus("Disconnected (status $status)")
+                VehicleBus.resetRideCounters()
+                stopGpsWatch()
                 cleanupGatt()
                 // Not a user disconnect (teardown clears targetAddress): wait for the bike to advertise.
                 // Covers both a dropped link and a failed connect attempt.
@@ -329,8 +339,10 @@ class BleVehicleService : LifecycleService() {
                 Tio.NOTIFY -> {   // data-TX notify enabled → grant credits, go live
                     tio = Tio.READY
                     grantCredits(g)
+                    VehicleBus.resetRideCounters() // original resets missed-call / SMS counts on (re)connect
                     VehicleBus.setConn(VehicleBus.Conn.CONNECTED)
                     VehicleBus.setStatus("Connected to cluster")
+                    recordVehicle(g)
                     startMusicSender()
                 }
                 else -> {}
@@ -351,12 +363,20 @@ class BleVehicleService : LifecycleService() {
         }
     }
 
+    /** Save / refresh this vehicle in the rider's garage once the link is fully up. */
+    @SuppressLint("MissingPermission")
+    private fun recordVehicle(g: BluetoothGatt) {
+        val name = (if (hasBlePerms()) g.device.name else null).orEmpty()
+        VehicleStore.recordConnected(g.device.address, name)
+    }
+
     @SuppressLint("MissingPermission")
     private fun onUartReady(g: BluetoothGatt) {
         g.getService(BleConstants.UART_SERVICE)?.getCharacteristic(BleConstants.UART_TX_NOTIFY)
             ?.let { enableNotify(g, it, false) }
         VehicleBus.setConn(VehicleBus.Conn.CONNECTED)
         VehicleBus.setStatus("Connected (ESP32)")
+        recordVehicle(g)
     }
 
     // ---- TIO handshake -------------------------------------------------------
@@ -412,6 +432,13 @@ class BleVehicleService : LifecycleService() {
         return if (max > 0) cur * 100 / max else 0
     }
 
+    /** Maps removed its notification right at the destination (last step "arrive", or < 100 m of trip left). */
+    private fun isArrival(n: VehicleBus.NavInstruction?): Boolean {
+        if (n == null) return false
+        val t = (n.maneuver + " " + n.road).lowercase()
+        return "arrive" in t || "destination" in t || n.remainingM in 0..100
+    }
+
     private val telephony: TelephonyManager? by lazy {
         getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager
     }
@@ -444,7 +471,10 @@ class BleVehicleService : LifecycleService() {
         lifecycleScope.launch {
             var tick = 0
             var callWasUp = false
+            var lastNav: VehicleBus.NavInstruction? = VehicleBus.nav.value
             var lastStatus: Pair<Int, Int>? = null
+            var sentMissed = 0
+            var sentSms = 0
             val statusDue = ArrayList<Long>()
             fun queueStatus() {
                 val now = System.currentTimeMillis()
@@ -471,6 +501,12 @@ class BleVehicleService : LifecycleService() {
                         when { it <= 20 -> 0; it < 40 -> 1; it < 60 -> 2; it < 80 -> 3; else -> 4 }
                     }) to signalLevel()
                     if (status != lastStatus) { if (lastStatus != null) queueStatus(); lastStatus = status }
+                    // Counters were reset (reconnect): start counting from zero again.
+                    if (VehicleBus.missedCalls.value < sentMissed) sentMissed = VehicleBus.missedCalls.value
+                    if (VehicleBus.smsCount.value < sentSms) sentSms = VehicleBus.smsCount.value
+                    if (VehicleBus.rejectPendingUntil.value != 0L && (call == null || !rejectWindowOpen())) {
+                        VehicleBus.setRejectPending(0L) // window ran out (or the call ended): back to normal
+                    }
                     if (call != null && (call.ringing || call.active)) {
                         callWasUp = true
                         if (call.active && callStartMs == 0L) callStartMs = System.currentTimeMillis()
@@ -478,7 +514,7 @@ class BleVehicleService : LifecycleService() {
                         val durSec = if (callStartMs > 0L)
                             ((System.currentTimeMillis() - callStartMs) / 1000).toInt() else 0
                         clusterWrite(
-                            ClusterProtocol.call(call.name, call.ringing, voiceVolPercent(), durSec, call.outgoing)
+                            ClusterProtocol.call(callDisplayName(call), call.ringing, voiceVolPercent(), durSec, call.outgoing)
                         )
                     } else if (callWasUp) {
                         // Call just ended: tell the cluster (original onCallReject → sendNoActiveData).
@@ -486,18 +522,33 @@ class BleVehicleService : LifecycleService() {
                         callStartMs = 0L
                         clusterWrite(ClusterProtocol.callNone())
                         queueStatus()
+                    } else if (newCount(VehicleBus.missedCalls.value, sentMissed, AppSettings.current.missedCalls)) {
+                        // Missed-call counter, sent once per new missed call (≥ 1 tick after the call-ended packet).
+                        sentMissed = VehicleBus.missedCalls.value
+                        clusterWrite(ClusterProtocol.missedCalls(sentMissed))
+                    } else if (newCount(VehicleBus.smsCount.value, sentSms, AppSettings.current.smsCounter)) {
+                        sentSms = VehicleBus.smsCount.value
+                        clusterWrite(ClusterProtocol.smsCount(sentSms))
                     } else if (statusDue.isNotEmpty() && statusDue.first() <= System.currentTimeMillis()) {
                         statusDue.removeAt(0)
                         clusterWrite(ClusterProtocol.phoneStatus(batt, status.second, riderName()))
                     } else {
                         callStartMs = 0L
                         val nav = VehicleBus.nav.value
-                        val navFresh = nav != null && System.currentTimeMillis() - nav.ts < 12_000
-                        if (navFresh) {
-                            // Cluster shows nav while guiding; refresh the music buffer every
-                            // few ticks so the music screen is not stale when the rider checks it.
-                            clusterWrite(ClusterProtocol.nav(nav!!))
+                        if (nav != null) {
+                            // Like the original's 800 ms nav sender: keep repeating the last instruction for as
+                            // long as Maps is guiding (it doesn't re-post while you're stopped at a light).
+                            // Refresh the music buffer every few ticks so that screen isn't stale.
+                            lastNav = nav
+                            if (AppSettings.current.gpsWarning) startGpsWatch() else stopGpsWatch()
+                            clusterWrite(ClusterProtocol.nav(nav, noSignal = gpsLost(nav)))
                             if (tick % 4 == 0) clusterWrite(ClusterProtocol.music(VehicleBus.media.value, volumePercent()))
+                        } else if (lastNav != null) {
+                            // Guidance ended: one final 'H' (arrived) or 'G' (cancelled) packet, as the original.
+                            val last = lastNav
+                            lastNav = null
+                            stopGpsWatch()
+                            clusterWrite(ClusterProtocol.navEnd(isArrival(last), last))
                         } else {
                             clusterWrite(ClusterProtocol.music(VehicleBus.media.value, volumePercent()))
                         }
@@ -507,8 +558,64 @@ class BleVehicleService : LifecycleService() {
                 tick++
                 delay(800)
             }
+            stopGpsWatch()
             senderRunning = false
         }
+    }
+
+    private fun rejectWindowOpen(): Boolean =
+        VehicleBus.rejectPendingUntil.value > SystemClock.elapsedRealtime()
+
+    /** Caller name, or "Press again N" (N = whole seconds left, 5..1) while a reject waits for confirmation. */
+    private fun callDisplayName(call: VehicleBus.CallInfo): String {
+        val left = VehicleBus.rejectPendingUntil.value - SystemClock.elapsedRealtime()
+        if (left <= 0L) return call.name
+        return "Press again " + ((left + 999) / 1000).coerceIn(1, 5)
+    }
+
+    private fun newCount(current: Int, sent: Int, enabled: Boolean) = enabled && current > sent
+
+    // ---- GPS watch (navigation "no signal" flag) ------------------------------------
+    // The original raises the flag when its own location fix is lost. We watch the phone's GPS while
+    // Maps is guiding: lost = GPS switched off, Maps says it has no GPS, or no fix for > 10 s.
+    private val locationManager: LocationManager? by lazy { getSystemService(Context.LOCATION_SERVICE) as? LocationManager }
+    private var gpsWatching = false
+    private var gpsCanListen = false
+    private var gpsSinceMs = 0L
+    private var lastFixMs = 0L
+    private val gpsListener = LocationListener { lastFixMs = SystemClock.elapsedRealtime() }
+
+    @SuppressLint("MissingPermission")
+    private fun startGpsWatch() {
+        if (gpsWatching) return
+        gpsWatching = true
+        gpsSinceMs = SystemClock.elapsedRealtime()
+        lastFixMs = 0L
+        gpsCanListen = try {
+            locationManager?.requestLocationUpdates(LocationManager.GPS_PROVIDER, 1_000L, 0f, gpsListener, Looper.getMainLooper())
+            locationManager != null
+        } catch (_: Exception) {
+            // No location access in the background (service wasn't started as a location FGS): fall back to
+            // "GPS switched off" and Maps' own "no GPS" text.
+            false
+        }
+    }
+
+    private fun stopGpsWatch() {
+        if (!gpsWatching) return
+        gpsWatching = false
+        try { locationManager?.removeUpdates(gpsListener) } catch (_: Exception) {}
+    }
+
+    private fun gpsLost(nav: VehicleBus.NavInstruction): Boolean {
+        if (!AppSettings.current.gpsWarning) return false
+        if (nav.mapsNoGps) return true
+        val lm = locationManager ?: return false
+        if (!lm.isProviderEnabled(LocationManager.GPS_PROVIDER)) return true
+        if (!gpsCanListen) return false
+        val now = SystemClock.elapsedRealtime()
+        val since = if (lastFixMs > 0L) lastFixMs else gpsSinceMs
+        return now - since > 10_000L
     }
 
     private fun voiceVolPercent(): Int {
@@ -535,8 +642,19 @@ class BleVehicleService : LifecycleService() {
             50 -> audio?.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_TOGGLE_MUTE, 1) // '2'
             55 -> audio?.adjustStreamVolume(AudioManager.STREAM_VOICE_CALL, AudioManager.ADJUST_RAISE, 0)  // '7'
             60 -> audio?.adjustStreamVolume(AudioManager.STREAM_VOICE_CALL, AudioManager.ADJUST_LOWER, 0)  // '<'
-            10 -> acceptCall()
-            15 -> endCall()
+            10 -> {
+                VehicleBus.setRejectPending(0L) // answering cancels a pending reject confirmation
+                if (AppSettings.current.bikeAnswer) acceptCall() else VehicleBus.addLog("answer button ignored (off in Settings)")
+            }
+            15 -> when {
+                !AppSettings.current.bikeReject -> VehicleBus.addLog("reject button ignored (off in Settings)")
+                AppSettings.current.confirmReject && !rejectWindowOpen() -> {
+                    // First press: open the 5 s window; the sender shows "Press again N" instead of the name.
+                    VehicleBus.setRejectPending(SystemClock.elapsedRealtime() + REJECT_CONFIRM_MS)
+                    VehicleBus.addLog("reject: waiting for a second press")
+                }
+                else -> { VehicleBus.setRejectPending(0L); endCall() }
+            }
             else -> {}
         }
     }
@@ -548,11 +666,27 @@ class BleVehicleService : LifecycleService() {
         try { if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) telecom?.acceptRingingCall() } catch (_: Exception) {}
     }
 
+    /** Reject a ringing call (and optionally text the caller) or hang up the current one. */
     @SuppressLint("MissingPermission")
     private fun endCall() {
         if (checkSelfPermission(android.Manifest.permission.ANSWER_PHONE_CALLS) !=
             PackageManager.PERMISSION_GRANTED) return
+        val call = VehicleBus.call.value
         try { if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) telecom?.endCall() } catch (_: Exception) {}
+        val s = AppSettings.current
+        if (call != null && call.ringing && !call.active && s.rejectSms) sendRejectText(call.number, s.rejectText)
+    }
+
+    /** Only after the rider rejected a ringing call from the bike, with the option switched on. */
+    private fun sendRejectText(number: String, text: String) {
+        if (number.isBlank() || text.isBlank()) return
+        if (checkSelfPermission(android.Manifest.permission.SEND_SMS) != PackageManager.PERMISSION_GRANTED) return
+        try {
+            val sms = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) getSystemService(SmsManager::class.java)
+                else @Suppress("DEPRECATION") SmsManager.getDefault()
+            sms?.sendMultipartTextMessage(number, null, sms.divideMessage(text), null, null)
+            VehicleBus.addLog("reject text sent")
+        } catch (_: Exception) {}
     }
 
     private fun onInbound(c: BluetoothGattCharacteristic, value: ByteArray) {
@@ -634,6 +768,7 @@ class BleVehicleService : LifecycleService() {
     private fun teardown() {
         // User disconnect: forget the bike so nothing (incl. a sticky restart) reconnects to it.
         targetAddress = null
+        VehicleBus.setActiveAddress(null)
         prefs.edit().remove(PREF_LAST_ADDRESS).apply()
         main.removeCallbacksAndMessages(null)
         reconnectPending = false
@@ -670,9 +805,18 @@ class BleVehicleService : LifecycleService() {
             .setContentIntent(open)
             .addAction(Notification.Action.Builder(null, "Turn off", turnOff).build())
             .build()
-        val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R)
+        val device = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R)
             android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE else 0
-        ServiceCompat.startForeground(this, NOTIF_ID, n, type)
+        // Add the location type when allowed (location granted + started while the app is visible) so the
+        // GPS watch keeps working in the background. Android refuses it otherwise; then run without it.
+        val withLocation = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
+            checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED)
+            device or android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION else device
+        try {
+            ServiceCompat.startForeground(this, NOTIF_ID, n, withLocation)
+        } catch (_: Exception) {
+            ServiceCompat.startForeground(this, NOTIF_ID, n, device)
+        }
     }
 
     companion object {
@@ -685,6 +829,7 @@ class BleVehicleService : LifecycleService() {
         private const val CHANNEL = "vehicle_link"
         private const val NOTIF_ID = 42
         const val ACTION_RESUME = "com.vehiclelink.app.RESUME"
+        const val REJECT_CONFIRM_MS = 5_000L
         private const val PREF_LAST_ADDRESS = "last_address" // auto-reconnect target; cleared on Turn off
         private const val PREF_LAST_BIKE = "last_bike"       // kept so the tile can turn the link back on
 

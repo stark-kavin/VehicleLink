@@ -55,6 +55,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.rounded.AddAPhoto
+import androidx.compose.material.icons.rounded.BatteryAlert
 import androidx.compose.material.icons.rounded.Autorenew
 import androidx.compose.material.icons.rounded.Bluetooth
 import androidx.compose.material.icons.rounded.BluetoothConnected
@@ -133,6 +134,7 @@ import com.vehiclelink.app.core.VehicleBus
 import com.vehiclelink.app.media.MediaHub
 import com.vehiclelink.app.ui.theme.Radius
 import com.vehiclelink.app.ui.theme.Space
+import com.vehiclelink.app.ui.theme.ChakraPetch
 import com.vehiclelink.app.ui.theme.Vl
 import com.vehiclelink.app.ui.theme.VlType
 import com.google.android.gms.maps.model.CameraPosition
@@ -150,7 +152,9 @@ fun VehicleLinkScreen(onOpenNotificationAccess: () -> Unit) {
     val ctx = LocalCtx()
     val conn by VehicleBus.conn.collectAsStateWithLifecycle()
     val status by VehicleBus.status.collectAsStateWithLifecycle()
-    val devices by VehicleBus.scan.collectAsStateWithLifecycle()
+    val vehicles by com.vehiclelink.app.core.VehicleStore.vehicles.collectAsStateWithLifecycle()
+    val activeAddress by VehicleBus.activeAddress.collectAsStateWithLifecycle()
+    val reconnecting by VehicleBus.reconnecting.collectAsStateWithLifecycle()
     val nav by VehicleBus.nav.collectAsStateWithLifecycle()
     val media by VehicleBus.media.collectAsStateWithLifecycle()
     val call by VehicleBus.call.collectAsStateWithLifecycle()
@@ -158,17 +162,35 @@ fun VehicleLinkScreen(onOpenNotificationAccess: () -> Unit) {
     val mapsKey = mapsApiKey(ctx)
     val phone by rememberPhoneStatus(ctx)
 
-    var showAll by remember { mutableStateOf(false) }
-    var showDebug by remember { mutableStateOf(false) }
+    var showAddSheet by remember { mutableStateOf(false) }
+    var screen by remember { mutableStateOf("home") }   // home | settings | debug
+    var resumes by remember { mutableStateOf(0) }
+    androidx.lifecycle.compose.LifecycleEventEffect(androidx.lifecycle.Lifecycle.Event.ON_RESUME) { resumes++ }
+    val batteryExempt = remember(resumes) { isBatteryExempt(ctx) }
     var photoVersion by remember { mutableStateOf(0) }
-    val vehicleBitmap = remember(photoVersion) { loadVehicleBitmap(ctx) }
+    val vehicleBitmap = remember(photoVersion, screen) { loadVehicleBitmap(ctx) }
     val pickPhoto = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null && saveVehiclePhoto(ctx, uri)) photoVersion++
     }
 
-    if (showDebug) { DebugScreen(onBack = { showDebug = false }); return }
+    when (screen) {
+        "debug" -> { DebugScreen(onBack = { screen = "settings" }); return }
+        "settings" -> {
+            SettingsScreen(
+                onBack = { screen = "home" },
+                onOpenNotificationAccess = onOpenNotificationAccess,
+                onOpenTestBench = { screen = "debug" },
+                hasCustomPhoto = vehicleBitmap != null,
+                onResetPhoto = { deleteVehiclePhoto(ctx); photoVersion++ },
+            )
+            return
+        }
+    }
 
     val connected = conn == VehicleBus.Conn.CONNECTED
+    // The vehicle on the hero: the one we're linked/linking to, else the most recently used one.
+    val heroVehicle = com.vehiclelink.app.core.VehicleStore.find(activeAddress) ?: vehicles.firstOrNull()
+    if (showAddSheet) AddVehicleSheet(onClose = { showAddSheet = false })
     val accent = if (call != null) Vl.Coral else connColor(conn)
     // safeDrawing = status + navigation bars + display cutout; content scrolls clear of all of them.
     val bars = WindowInsets.safeDrawing.asPaddingValues()
@@ -186,14 +208,9 @@ fun VehicleLinkScreen(onOpenNotificationAccess: () -> Unit) {
             item(key = "header") {
                 Header(
                     conn = conn,
-                    showAll = showAll,
-                    hasPhoto = vehicleBitmap != null,
-                    onToggleShowAll = { showAll = !showAll },
-                    onNotificationAccess = onOpenNotificationAccess,
                     onPickPhoto = { pickPhoto.launch("image/*") },
-                    onResetPhoto = { deleteVehiclePhoto(ctx); photoVersion++ },
                     onDisconnect = { BleVehicleService.disconnect(ctx) },
-                    onDebug = { showDebug = true },
+                    onSettings = { screen = "settings" },
                 )
             }
 
@@ -201,16 +218,25 @@ fun VehicleLinkScreen(onOpenNotificationAccess: () -> Unit) {
                 Hero(
                     conn = conn,
                     status = status,
+                    name = heroVehicle?.nickname ?: BIKE_NAME,
+                    waiting = reconnecting && conn == VehicleBus.Conn.DISCONNECTED,
                     photo = vehicleBitmap,
                     onPickPhoto = { pickPhoto.launch("image/*") },
-                    onScan = { BleVehicleService.scan(ctx, if (showAll) "" else BleConstants.DEFAULT_NAME_FILTER) },
+                    connectLabel = heroVehicle?.let { "Connect to ${it.nickname}" } ?: "Add your vehicle",
+                    onConnect = {
+                        val v = heroVehicle
+                        if (v != null) BleVehicleService.connect(ctx, v.address) else showAddSheet = true
+                    },
+                    onSearching = { showAddSheet = true },
                     onDisconnect = { BleVehicleService.disconnect(ctx) },
                 )
             }
 
             item(key = "telemetry") {
                 Row(horizontalArrangement = Arrangement.spacedBy(Space.s)) {
-                    Metric("Phone battery", "${phone.battery}%", Modifier.weight(1f)) { BatteryGlyph(phone.battery) }
+                    Metric(if (phone.charging) "Charging" else "Phone battery", "${phone.battery}%", Modifier.weight(1f)) {
+                        BatteryGlyph(phone.battery, phone.charging)
+                    }
                     Metric("Signal", signalWord(phone.signal), Modifier.weight(1f)) { SignalBars(phone.signal) }
                     Metric("Bike link", if (connected) "Live" else "Off", Modifier.weight(1f)) {
                         Icon(
@@ -221,8 +247,34 @@ fun VehicleLinkScreen(onOpenNotificationAccess: () -> Unit) {
                 }
             }
 
+            item(key = "vehicles") {
+                VehiclesSection(
+                    vehicles = vehicles,
+                    conn = conn,
+                    activeAddress = activeAddress,
+                    onConnect = { v -> BleVehicleService.connect(ctx, v.address) },
+                    onAdd = { showAddSheet = true },
+                    modifier = Modifier.animateItem(),
+                )
+            }
+
             val c = call
             if (c != null) item(key = "call") { CallCard(c, Modifier.animateItem()) }
+
+            if (!batteryExempt) item(key = "battery") {
+                GlassCard(Modifier.animateItem(), accent = Vl.Amber, onClick = { requestBatteryExemption(ctx) }) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        IconBadge(Icons.Rounded.BatteryAlert, Vl.Amber)
+                        Spacer(Modifier.width(Space.m))
+                        Column(Modifier.weight(1f)) {
+                            Text("Keep the bike link alive", style = VlType.Body, color = Vl.Text)
+                            Text("So the bike doesn't drop mid-ride",
+                                style = VlType.Caption, color = Vl.TextDim)
+                        }
+                        Text("Allow", style = VlType.Label, color = Vl.Amber)
+                    }
+                }
+            }
 
             if (!listenerOn) item(key = "access") {
                 GlassCard(Modifier.animateItem(), accent = Vl.Amber) {
@@ -236,19 +288,6 @@ fun VehicleLinkScreen(onOpenNotificationAccess: () -> Unit) {
                     }
                     Gap(14.dp)
                     PrimaryAction("Open settings", PrimaryKind.Go, null, onOpenNotificationAccess, Modifier.fillMaxWidth())
-                }
-            }
-
-            if (devices.isNotEmpty() && !connected) {
-                item(key = "nearbyLabel") {
-                    Row(Modifier.animateItem().padding(top = 6.dp, start = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Eyebrow("Nearby")
-                        Spacer(Modifier.width(8.dp))
-                        Text("${devices.size}", color = Vl.TextFaint, style = MaterialTheme.typography.labelSmall)
-                    }
-                }
-                items(devices, key = { it.address }) { d ->
-                    DeviceRow(d, Modifier.animateItem()) { BleVehicleService.connect(ctx, d.address) }
                 }
             }
 
@@ -282,7 +321,7 @@ fun VehicleLinkScreen(onOpenNotificationAccess: () -> Unit) {
  * directly under the clock or the nav buttons.
  */
 @Composable
-private fun BoxScope.SystemBarScrims() {
+fun BoxScope.SystemBarScrims() {
     val top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     val bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
     Box(
@@ -300,14 +339,9 @@ private fun BoxScope.SystemBarScrims() {
 @Composable
 private fun Header(
     conn: VehicleBus.Conn,
-    showAll: Boolean,
-    hasPhoto: Boolean,
-    onToggleShowAll: () -> Unit,
-    onNotificationAccess: () -> Unit,
     onPickPhoto: () -> Unit,
-    onResetPhoto: () -> Unit,
     onDisconnect: () -> Unit,
-    onDebug: () -> Unit,
+    onSettings: () -> Unit,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -321,19 +355,15 @@ private fun Header(
             ) { Text(it, style = MaterialTheme.typography.headlineMedium, color = Vl.Text) }
         }
         Box {
-            RoundButton(Icons.Rounded.MoreHoriz, "Menu", 44.dp, filled = false, onClick = { menuOpen = true })
+            RoundButton(Icons.Rounded.MoreHoriz, "Menu", Space.Touch, filled = false, onClick = { menuOpen = true })
             DropdownMenu(
                 expanded = menuOpen, onDismissRequest = { menuOpen = false },
                 shape = RoundedCornerShape(18.dp), containerColor = Color(0xFF151920),
             ) {
-                DropdownMenuItem(text = { Text(if (showAll) "Show only bikes (MCU…)" else "Show all Bluetooth devices") },
-                    onClick = { onToggleShowAll(); menuOpen = false })
-                DropdownMenuItem(text = { Text("Notification access") }, onClick = { onNotificationAccess(); menuOpen = false })
+                DropdownMenuItem(text = { Text("Settings") }, onClick = { onSettings(); menuOpen = false })
                 DropdownMenuItem(text = { Text("Set bike photo") }, onClick = { onPickPhoto(); menuOpen = false })
-                if (hasPhoto) DropdownMenuItem(text = { Text("Use default silhouette") }, onClick = { onResetPhoto(); menuOpen = false })
                 if (conn == VehicleBus.Conn.CONNECTED || conn == VehicleBus.Conn.CONNECTING)
                     DropdownMenuItem(text = { Text("Disconnect", color = Vl.Coral) }, onClick = { onDisconnect(); menuOpen = false })
-                DropdownMenuItem(text = { Text("Debug tools") }, onClick = { onDebug(); menuOpen = false })
             }
         }
     }
@@ -352,9 +382,13 @@ private fun headline(conn: VehicleBus.Conn) = when (conn) {
 private fun Hero(
     conn: VehicleBus.Conn,
     status: String,
+    name: String,
+    waiting: Boolean,
     photo: ImageBitmap?,
     onPickPhoto: () -> Unit,
-    onScan: () -> Unit,
+    connectLabel: String,
+    onConnect: () -> Unit,
+    onSearching: () -> Unit,
     onDisconnect: () -> Unit,
 ) {
     val color = connColor(conn)
@@ -375,17 +409,27 @@ private fun Hero(
             val bikeMod = Modifier.fillMaxWidth(0.94f).height(200.dp)
                 .graphicsLayer { translationY = if (connected) bob.dp.toPx() else 0f }
             if (photo != null) {
-                androidx.compose.foundation.Image(photo, BIKE_NAME, bikeMod, contentScale = ContentScale.Fit)
+                androidx.compose.foundation.Image(photo, name, bikeMod, contentScale = ContentScale.Fit)
             } else {
-                Image(painterResource(R.drawable.bike_hero), BIKE_NAME, bikeMod)
+                Image(painterResource(R.drawable.bike_hero), name, bikeMod)
                 Row(
                     Modifier.align(Alignment.TopEnd).clip(CircleShape).background(Vl.Glass).padding(8.dp),
                 ) { Icon(Icons.Rounded.AddAPhoto, "Set photo", tint = Vl.TextDim, modifier = Modifier.size(16.dp)) }
             }
         }
-        Text(BIKE_NAME, style = MaterialTheme.typography.titleLarge, color = Vl.Text)
+        Text(name, style = MaterialTheme.typography.titleLarge, color = Vl.Text, maxLines = 1)
         Gap(10.dp)
-        StatusPill(conn, status)
+        StatusPill(conn, when (conn) {
+            VehicleBus.Conn.CONNECTED -> "Connected"
+            VehicleBus.Conn.CONNECTING -> "Connecting…"
+            VehicleBus.Conn.SCANNING -> "Searching nearby…"
+            // Keep actionable service messages (Bluetooth off / permission); the add sheet explains scan results.
+            VehicleBus.Conn.DISCONNECTED -> when {
+                waiting -> "Waiting for your bike"
+                status.contains("Bluetooth", ignoreCase = true) -> status
+                else -> "Not connected"
+            }
+        })
         Gap(20.dp)
         when (conn) {
             VehicleBus.Conn.CONNECTED ->
@@ -393,9 +437,10 @@ private fun Hero(
             VehicleBus.Conn.CONNECTING ->
                 PrimaryAction("Connecting…", PrimaryKind.Busy, null, onDisconnect, Modifier.fillMaxWidth())
             VehicleBus.Conn.SCANNING ->
-                PrimaryAction("Searching…", PrimaryKind.Busy, null, {}, Modifier.fillMaxWidth())
+                PrimaryAction("Searching…", PrimaryKind.Busy, null, onSearching, Modifier.fillMaxWidth())
             VehicleBus.Conn.DISCONNECTED ->
-                PrimaryAction("Connect to bike", PrimaryKind.Go, Icons.Rounded.BluetoothSearching, onScan, Modifier.fillMaxWidth())
+                if (waiting) PrimaryAction("Waiting for your bike…", PrimaryKind.Busy, null, onDisconnect, Modifier.fillMaxWidth())
+                else PrimaryAction(connectLabel, PrimaryKind.Go, Icons.Rounded.BluetoothSearching, onConnect, Modifier.fillMaxWidth())
         }
     }
 }
@@ -408,6 +453,11 @@ private fun CallCard(c: VehicleBus.CallInfo, modifier: Modifier) {
     var now by remember { mutableLongStateOf(SystemClock.elapsedRealtime()) }
     LaunchedEffect(c.active) { while (c.active) { now = SystemClock.elapsedRealtime(); delay(500) } }
     val secs = ((now - startedAt) / 1000).coerceAtLeast(0)
+    // Confirm-reject window (first bike press): count it down here too.
+    val pendingUntil by VehicleBus.rejectPendingUntil.collectAsStateWithLifecycle()
+    var tick by remember { mutableLongStateOf(SystemClock.elapsedRealtime()) }
+    LaunchedEffect(pendingUntil) { while (pendingUntil > SystemClock.elapsedRealtime()) { tick = SystemClock.elapsedRealtime(); delay(200) } }
+    val confirmLeft = ((pendingUntil - tick + 999) / 1000).coerceAtLeast(0)
     GlassCard(modifier, accent = Vl.Coral) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Avatar(c.name.firstOrNull { it.isLetterOrDigit() }?.uppercase() ?: "?", Vl.Coral, ringing = c.ringing)
@@ -417,7 +467,7 @@ private fun CallCard(c: VehicleBus.CallInfo, modifier: Modifier) {
                     when { c.ringing -> "Incoming call"; c.outgoing -> "Outgoing call"; else -> "On call" },
                     color = Vl.Coral
                 )
-                Text(c.name, color = Vl.Text, fontSize = 22.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                Text(c.name, color = Vl.Text, fontFamily = ChakraPetch, fontSize = 22.sp, fontWeight = FontWeight.Bold, maxLines = 1)
                 Text(
                     if (c.ringing) "Showing on your bike" else "%d:%02d · on your bike".format(secs / 60, secs % 60),
                     color = Vl.TextDim, fontSize = 13.sp
@@ -425,25 +475,9 @@ private fun CallCard(c: VehicleBus.CallInfo, modifier: Modifier) {
             }
             Icon(if (c.outgoing) Icons.Rounded.CallMade else Icons.Rounded.Call, null, tint = Vl.Coral)
         }
-    }
-}
-
-@Composable
-private fun DeviceRow(d: VehicleBus.ScanDevice, modifier: Modifier, onClick: () -> Unit) {
-    val tint = if (d.hasVehicleService) Vl.Volt else Vl.TextDim
-    GlassCard(modifier, accent = if (d.hasVehicleService) Vl.Volt else null, onClick = onClick, padding = 14.dp) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            IconBadge(Icons.Rounded.Bluetooth, tint, size = 40.dp)
-            Spacer(Modifier.width(14.dp))
-            Column(Modifier.weight(1f)) {
-                Text(d.name, color = Vl.Text, fontWeight = FontWeight.SemiBold, maxLines = 1)
-                Text(
-                    if (d.hasVehicleService) "Compatible · tap to connect" else d.address,
-                    color = Vl.TextDim, fontSize = 12.sp,
-                    fontFamily = if (d.hasVehicleService) FontFamily.Default else FontFamily.Monospace
-                )
-            }
-            SignalBars(rssiLevel(d.rssi), color = tint)
+        AnimatedVisibility(confirmLeft > 0, enter = fadeIn() + expandVertically(), exit = fadeOut() + shrinkVertically()) {
+            Text("Press reject on the bike again to confirm · ${confirmLeft}s",
+                style = VlType.Label, color = Vl.Amber, modifier = Modifier.padding(top = Space.s))
         }
     }
 }
@@ -477,7 +511,7 @@ private fun MediaCard(m: VehicleBus.MediaInfo?) {
                 Gap(2.dp)
                 Text(
                     if (has) m!!.title else "Nothing playing",
-                    color = Vl.Text, fontSize = 18.sp, fontWeight = FontWeight.Bold, maxLines = 1,
+                    color = Vl.Text, fontFamily = ChakraPetch, fontSize = 19.sp, fontWeight = FontWeight.Bold, maxLines = 1,
                     modifier = Modifier.basicMarquee()
                 )
                 Text(
@@ -523,18 +557,19 @@ private fun NavCard(n: VehicleBus.NavInstruction?) {
                 Eyebrow("Next turn", color = if (n != null) Vl.Cyan else Vl.TextDim)
                 Gap(2.dp)
                 if (n == null) {
-                    Text("No route", color = Vl.Text, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                    Text("No route", color = Vl.Text, fontFamily = ChakraPetch, fontSize = 19.sp, fontWeight = FontWeight.Bold)
                     Text("Start directions in Google Maps", color = Vl.TextDim, fontSize = 13.sp)
                 } else {
                     Row(verticalAlignment = Alignment.Bottom) {
                         if (n.distance.isNotEmpty()) {
-                            Text(n.distance, color = Vl.Cyan, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                            Text(n.distance, color = Vl.Cyan, fontFamily = ChakraPetch, fontSize = 24.sp, fontWeight = FontWeight.Bold)
                             Spacer(Modifier.width(8.dp))
                         }
                         Text(n.maneuver, color = Vl.Text, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 1,
                             modifier = Modifier.padding(bottom = 2.dp))
                     }
                     if (n.road.isNotEmpty()) Text(n.road, color = Vl.TextDim, fontSize = 13.sp, maxLines = 1)
+                    tripLine(n)?.let { Text(it, color = Vl.TextFaint, fontSize = 12.sp, maxLines = 1) }
                 }
             }
         }
@@ -543,7 +578,7 @@ private fun NavCard(n: VehicleBus.NavInstruction?) {
 
 // ================================================================ small helpers
 
-private data class PhoneStatus(val battery: Int, val signal: Int)
+private data class PhoneStatus(val battery: Int, val signal: Int, val charging: Boolean = false)
 
 /** Battery % and signal level 0..4, polled every few seconds (the same values sent to the bike). */
 @Composable
@@ -556,9 +591,24 @@ private fun rememberPhoneStatus(ctx: Context) = produceState(PhoneStatus(0, 0), 
         val sig = try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) tm?.signalStrength?.level ?: 0 else 0
         } catch (_: Exception) { 0 }
-        value = PhoneStatus(if (level >= 0 && scale > 0) level * 100 / scale else 0, sig)
+        // Charging = plugged in and charging, or plugged in and full.
+        val st = i?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
+        val charging = st == BatteryManager.BATTERY_STATUS_CHARGING || st == BatteryManager.BATTERY_STATUS_FULL
+        value = PhoneStatus(if (level >= 0 && scale > 0) level * 100 / scale else 0, sig, charging)
         delay(3_000)
     }
+}
+
+/** "Arrive 6:26 pm · 11.3 km left" — the same ETA / remainder the bike receives. */
+private fun tripLine(n: VehicleBus.NavInstruction): String? {
+    val parts = ArrayList<String>()
+    if (n.etaHour in 0..23 && n.etaMinute in 0..59) {
+        val h12 = (n.etaHour % 12).let { if (it == 0) 12 else it }
+        parts += "Arrive %d:%02d %s".format(h12, n.etaMinute, if (n.etaHour >= 12) "pm" else "am")
+    }
+    if (n.remainingM >= 0) parts += if (n.remainingM < 1000) "${n.remainingM} m left"
+        else "%.1f km left".format(n.remainingM / 1000.0)
+    return parts.takeIf { it.isNotEmpty() }?.joinToString(" · ")
 }
 
 private fun signalWord(level: Int) = when (level) { 4 -> "Excellent"; 3 -> "Good"; 2 -> "Fair"; 1 -> "Weak"; else -> "None" }
@@ -581,154 +631,6 @@ private fun maneuverIcon(maneuver: String): ImageVector {
     }
 }
 
-// Debug screen keeps its own simple layout; these give it the new glass look.
-@Composable
-private fun SurfaceCard(content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit) =
-    GlassCard(content = content)
-
-@Composable
-private fun SectionLabel(text: String) = Eyebrow(text)
-
-// ---------------- Debug screen ----------------
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun DebugScreen(onBack: () -> Unit) {
-    val log by VehicleBus.log.collectAsStateWithLifecycle()
-    val streamOn by VehicleBus.debugStream.collectAsStateWithLifecycle()
-    var song by remember { mutableStateOf("Test Song") }
-    var artist by remember { mutableStateOf("Test Artist") }
-    var playing by remember { mutableStateOf(true) }
-    var caller by remember { mutableStateOf("Mom") }
-    var ringing by remember { mutableStateOf(true) }
-    var navDist by remember { mutableStateOf("450 m") }
-    var navRoad by remember { mutableStateOf("MG Road") }
-    var navDir by remember { mutableStateOf("I") }
-    var streamingNav by remember { mutableStateOf(false) }
-    var raw by remember { mutableStateOf("9Hello~~~~~~~~~~~~~~~World~~~~~~~~~~~~~~~00000dd") }
-
-    fun musicBytes() = ClusterProtocol.music(VehicleBus.MediaInfo(playing, song, artist, 0L, 0L), 50)
-
-    Scaffold(
-        containerColor = MaterialTheme.colorScheme.background,
-        topBar = {
-            TopAppBar(
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.background,
-                    titleContentColor = MaterialTheme.colorScheme.onBackground,
-                ),
-                navigationIcon = {
-                    IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
-                },
-                title = { Text("Debug / Test", fontWeight = FontWeight.Bold) },
-            )
-        }
-    ) { pad ->
-        LazyColumn(
-            Modifier.fillMaxSize().padding(pad).padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            item {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.size(12.dp).background(
-                        if (streamOn != null) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.onSurfaceVariant, CircleShape))
-                    Spacer(Modifier.size(8.dp))
-                    Text(if (streamOn != null) "Streaming a test packet"
-                         else "Not streaming (auto music/nav/call active)", fontSize = 13.sp)
-                    Spacer(Modifier.weight(1f))
-                    OutlinedButton(onClick = { streamingNav = false; VehicleBus.setDebugStream(null) }) { Text("Stop") }
-                }
-            }
-
-            item {
-                SurfaceCard {
-                    SectionLabel("Music")
-                    OutlinedTextField(song, { song = it }, label = { Text("Song") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                    OutlinedTextField(artist, { artist = it }, label = { Text("Artist") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Switch(checked = playing, onCheckedChange = { playing = it })
-                        Text("Playing", fontSize = 13.sp)
-                        Spacer(Modifier.weight(1f))
-                        Button(onClick = { streamingNav = false; VehicleBus.setDebugStream(musicBytes()) }) { Text("Stream music") }
-                    }
-                }
-            }
-
-            item {
-                SurfaceCard {
-                    SectionLabel("Call (no real call)")
-                    OutlinedTextField(caller, { caller = it }, label = { Text("Caller") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Switch(checked = ringing, onCheckedChange = { ringing = it })
-                        Text(if (ringing) "Ringing" else "Active", fontSize = 13.sp)
-                        Spacer(Modifier.weight(1f))
-                        Button(onClick = { streamingNav = false; VehicleBus.setDebugStream(ClusterProtocol.call(caller, ringing, 50, 12)) }) { Text("Stream call") }
-                    }
-                }
-            }
-
-            item {
-                SurfaceCard {
-                    SectionLabel("Nav — stream, then step letters to map arrows")
-                    OutlinedTextField(navDist, { navDist = it }, label = { Text("Distance e.g. 450 m") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                    OutlinedTextField(navRoad, { navRoad = it }, label = { Text("Road") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                    Spacer(Modifier.height(6.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        OutlinedButton(onClick = {
-                            navDir = stepLetter(navDir, -1)
-                            if (streamingNav) VehicleBus.setDebugStream(ClusterProtocol.navRaw(navDir, navDist, navRoad))
-                        }) { Text("◀") }
-                        Text("dir = $navDir", modifier = Modifier.weight(1f), fontWeight = FontWeight.Bold,
-                            fontSize = 20.sp, color = MaterialTheme.colorScheme.primary)
-                        OutlinedButton(onClick = {
-                            navDir = stepLetter(navDir, +1)
-                            if (streamingNav) VehicleBus.setDebugStream(ClusterProtocol.navRaw(navDir, navDist, navRoad))
-                        }) { Text("▶") }
-                        Spacer(Modifier.size(6.dp))
-                        Button(onClick = {
-                            streamingNav = true
-                            VehicleBus.setDebugStream(ClusterProtocol.navRaw(navDir, navDist, navRoad))
-                        }) { Text("Stream nav") }
-                    }
-                }
-            }
-
-            item {
-                SurfaceCard {
-                    SectionLabel("Raw packet (type char first)")
-                    OutlinedTextField(raw, { raw = it }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                    Row {
-                        Button(onClick = { VehicleBus.emitDebug(ClusterProtocol.rawPacket(raw)) }) { Text("Send once") }
-                        Spacer(Modifier.size(6.dp))
-                        OutlinedButton(onClick = { streamingNav = false; VehicleBus.setDebugStream(ClusterProtocol.rawPacket(raw)) }) { Text("Stream") }
-                    }
-                }
-            }
-
-            item {
-                SurfaceCard {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        SectionLabel("Log (TX / RX)")
-                        Spacer(Modifier.weight(1f))
-                        OutlinedButton(onClick = { VehicleBus.clearLog() }) { Text("Clear") }
-                    }
-                    HorizontalDivider(Modifier.padding(vertical = 6.dp))
-                    if (log.isEmpty()) Text("—", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    log.take(16).forEach { Text(it, fontSize = 10.sp, fontFamily = FontFamily.Monospace) }
-                }
-            }
-        }
-    }
-}
-
-private fun stepLetter(cur: String, delta: Int): String {
-    val c = cur.firstOrNull()?.uppercaseChar() ?: 'A'
-    var n = c.code + delta
-    if (n < 'A'.code) n = 'Z'.code
-    if (n > 'Z'.code) n = 'A'.code
-    return n.toChar().toString()
-}
 
 // ---------------- helpers ----------------
 
@@ -752,7 +654,7 @@ private fun loadVehicleBitmap(ctx: Context): ImageBitmap? {
     return try { BitmapFactory.decodeFile(f.absolutePath)?.asImageBitmap() } catch (_: Exception) { null }
 }
 
-private fun deleteVehiclePhoto(ctx: Context) { runCatching { vehiclePhotoFile(ctx).delete() } }
+fun deleteVehiclePhoto(ctx: Context) { runCatching { vehiclePhotoFile(ctx).delete() } }
 
 private fun saveVehiclePhoto(ctx: Context, uri: Uri): Boolean = try {
     val src = ctx.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it) }

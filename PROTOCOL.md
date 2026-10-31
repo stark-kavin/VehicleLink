@@ -50,10 +50,12 @@ roundabout(2) noSignal(1) remainDistance(5) remainUnit(1) remainTime(4) nextBina
 secondRoundabout(2) roadName(18)
 ```
 - id = `1`.
-- binaryDir = maneuver letter via `setDirBinary`; roundabout = `B`; cancelled = `G`;
-  finished = `H`. Lowercased when the turn is imminent (< 200 m).
+- binaryDir = maneuver letter via `setDirBinary` (full table in docs/original-app-analysis.md §13:
+  left `I`, right `J`, straight `G`, roundabout `U`, U-turn `P`, …); finished = `H`, cancelled = `G`.
+  Lowercased when the turn is imminent (< 200 m).
 - distance = 5 digits, left zero-padded (`00450`, `001.2`). **unit = `1` for metres, `k` for km.**
-- eta = etaHour(2) + meridian(1, `A`/`P`) + etaMinute(2) + demeridian(1, **`M`**).
+- eta = etaHour(2, 12-hour) + meridian(1) + etaMinute(2) + demeridian(1); this cluster (music feature)
+  gets lower-case `a`/`p` and `m`.
 - roundabout = exit number `01`..`09` (from "Nth exit"), else `00`.
 - noSignal = `1` when GPS lost, else `0`.
 - remainDistance(5)/remainUnit(1)/remainTime(4)/nextBinaryDir(1) = trip remainders; `~`-filled when unknown.
