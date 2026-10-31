@@ -1,8 +1,15 @@
 # VehicleLink
 
-A lean Android companion app for the **Hero Karizma XMR** instrument cluster. It talks to the bike's
-dashboard over Bluetooth Low Energy and shows your calls, music, Google Maps turn-by-turn directions and
-phone status on it, without the account, cloud services and analytics of the official app.
+A lean Android companion app for **Hero motorcycles with a Bluetooth TFT display**. It talks to the
+bike's dashboard over Bluetooth Low Energy and shows your calls, music, Google Maps turn-by-turn
+directions and phone status on it, without the account, cloud services and analytics of the official app.
+
+> **Supported bikes:** Hero models with a connected TFT dashboard, which all use the same Bluetooth
+> dashboard protocol. Developed on the **Karizma XMR CE**; other models haven't been tried yet,
+> and some get a reduced feature set from Hero (for example no call screen), so reports are welcome.
+
+> **No release yet.** The app is still in development and not finished, so there's no APK download or
+> GitHub release. To try it, build it from source (see [Build and install](#build-and-install)).
 
 The cluster protocol was worked out by studying the official Hero app (see
 [docs/original-app-analysis.md](docs/original-app-analysis.md)); VehicleLink re-implements the same
@@ -154,5 +161,7 @@ turn-by-turn on the bike works without it.
 
 ## Credits
 
+- Built with the help of [Claude](https://www.anthropic.com/claude) (Anthropic), used as a coding
+  assistant for the protocol analysis, the app code and the documentation.
 - Display font: [Chakra Petch](https://github.com/m4rc1e/Chakra-Petch) by Cadson Demak, SIL Open Font
   License 1.1 ([licence](docs/licenses/ChakraPetch-OFL.txt)).
