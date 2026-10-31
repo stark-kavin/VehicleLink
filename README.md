@@ -12,12 +12,13 @@ behaviour and packet formats in its own code.
 > interoperability with a bike you own. Use at your own risk; don't operate the app while riding.
 
 <p align="center">
-  <img src="docs/screenshots/home.png" width="240" alt="Home screen">
+  <img src="docs/screenshots/home.png" width="240" alt="Home: your vehicles, waiting for the bike to power on">
+  &nbsp;
+  <img src="docs/screenshots/add-vehicle.png" width="240" alt="Add-vehicle sheet searching nearby">
   &nbsp;
   <img src="docs/screenshots/settings.png" width="240" alt="Settings">
-  &nbsp;
-  <img src="docs/screenshots/test-bench-arrows.png" width="240" alt="Test bench: turn arrows">
 </p>
+<p align="center"><sub>Home (waiting for the bike to power on) · Adding a vehicle · Settings</sub></p>
 
 ## Features
 
@@ -55,8 +56,13 @@ behaviour and packet formats in its own code.
 - Dark "cockpit" design with animated states, the Chakra Petch display font, and a charging indicator.
 
 <p align="center">
-  <img src="docs/screenshots/test-bench-phone.png" width="240" alt="Test bench: phone status and counters">
+  <img src="docs/screenshots/test-bench-arrows.png" width="240" alt="Test bench: every turn arrow">
+  &nbsp;
+  <img src="docs/screenshots/test-bench-call.png" width="240" alt="Test bench: fake calls and the confirm-reject countdown">
+  &nbsp;
+  <img src="docs/screenshots/test-bench-phone.png" width="240" alt="Test bench: battery, signal and counters">
 </p>
+<p align="center"><sub>Test bench: turn arrows · calls and confirm-reject · phone status and counters</sub></p>
 
 ## Status
 
